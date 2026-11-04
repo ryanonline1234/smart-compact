@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>smart-compact</title>
+<meta name="description" content="A Claude Code plugin: checkpoint the session, compact it automatically, and rehydrate on your terms, with the cost measured before anything is wiped.">
+<meta property="og:title" content="smart-compact">
+<meta property="og:description" content="Checkpoint, compact, rehydrate on your terms. Every number measured.">
+<meta name="color-scheme" content="dark light">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg fill='none' stroke='%23e8eae6' stroke-width='1.5'%3E%3Cpath d='M16 4 28 10 16 16 4 10Z'/%3E%3Cpath d='M4 10v5l12 6 12-6v-5M4 15v5l12 6 12-6v-5'/%3E%3C/g%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@125,800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/*
+  Family: exploded-blueprint-mono (awwwards-taste). Kept: one assembly in 1px hairlines, no
+  fills; mono labels at the margins tethered by 45-degree leader lines (gap 4px,
+  exploded-blueprint-mono#1); colour only on the part being named; every label a number + unit;
+  the annotated chapter inverts the ground. Replaced (costume): the exemplar's palette and fonts.
+  DECISION: cold graphite/bone instead of the exemplar's warm neutrals, because the subject is a
+  terminal instrument. DECISION: Archivo wdth 125 / IBM Plex Mono are the family's own free
+  substitutes for DINish / Berkeley Mono.
+*/
+:root {
+  --out3: cubic-bezier(0.33, 1, 0.68, 1);      /* out(3), exploded-blueprint-mono entry Motion line */
+  --reveal: 250ms;                               /* exploded-blueprint-mono entry: 250ms reveals */
+  --a-bg: #131517; --a-ink: #e8eae6; --a-sub: #9aa1a6; --a-dim: #464c51; --a-hair: #7d848a;
+  --a-amber: #e2a54b; --a-steel: #69aed0; --a-green: #86c56f;
+  --b-bg: #e6e3dc; --b-ink: #15171a; --b-sub: #4f4d48; --b-dim: #b4b0a7; --b-hair: #8c877e;
+  --b-amber: #8f5a10; --b-steel: #276585; --b-green: #3a7428;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --margin: clamp(16px, 4vw, 64px);
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --a-bg: #e6e3dc; --a-ink: #15171a; --a-sub: #4f4d48; --a-dim: #b4b0a7; --a-hair: #8c877e;
+    --a-amber: #8f5a10; --a-steel: #276585; --a-green: #3a7428;
+    --b-bg: #131517; --b-ink: #e8eae6; --b-sub: #9aa1a6; --b-dim: #464c51; --b-hair: #7d848a;
+    --b-amber: #e2a54b; --b-steel: #69aed0; --b-green: #86c56f;
+  }
+}
+[data-ground="a"], body { --bg: var(--a-bg); --ink: var(--a-ink); --sub: var(--a-sub); --dim: var(--a-dim); --hair: var(--a-hair); --amber: var(--a-amber); --steel: var(--a-steel); --green: var(--a-green); }
+[data-ground="b"] { --bg: var(--b-bg); --ink: var(--b-ink); --sub: var(--b-sub); --dim: var(--b-dim); --hair: var(--b-hair); --amber: var(--b-amber); --steel: var(--b-steel); --green: var(--b-green); }
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 400 .875rem/1.6 var(--mono); }
+[data-ground] { background: var(--bg); color: var(--ink); }
+a { color: inherit; text-decoration: underline; text-decoration-color: var(--hair); text-underline-offset: 3px; }
+a:hover { text-decoration-color: var(--ink); }
+a:focus-visible, button:focus-visible { outline: 1px solid var(--ink); outline-offset: 3px; }
+.wrap { padding: 0 var(--margin); }
+.kicker { font: 500 .75rem/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--sub); }
+h1, h2 { font-family: var(--display); font-weight: 800; font-stretch: 125%; font-variation-settings: "wdth" 125; letter-spacing: -.01em; margin: 0; }
+h1 { font-size: clamp(2.25rem, 5.4vw, 4rem); line-height: .9; max-width: 13ch; }
+h2 { font-size: clamp(1.5rem, 3vw, 2.25rem); line-height: .95; }
+
+/* top bar */
+.bar { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 18px var(--margin); z-index: 5; }
+.bar nav { display: flex; gap: 24px; }
+
+/* hero */
+.hero { min-height: 100vh; min-height: 100svh; display: grid; grid-template-columns: minmax(0, 1fr); align-content: end; gap: 28px; padding-bottom: 72px; padding-top: 96px; position: relative; }
+.hero p.lede { max-width: 58ch; color: var(--sub); margin: 0; }
+.cmd { display: flex; align-items: stretch; border: 1px solid var(--hair); max-width: 720px; min-width: 0; }
+.cmd code { flex: 1; padding: 12px 14px; font: 400 .875rem/1.5 var(--mono); overflow-x: auto; white-space: pre; }
+.cmd button { font: 500 .75rem var(--mono); letter-spacing: .06em; text-transform: uppercase; background: none; color: var(--ink); border: 0; border-left: 1px solid var(--hair); padding: 0 16px; cursor: pointer; }
+.cmd button:hover { background: color-mix(in srgb, var(--ink) 8%, transparent); }
+.hero .ruler { position: absolute; right: var(--margin); bottom: 72px; text-align: right; color: var(--sub); font-size: .75rem; line-height: 1.7; }
+.hero .ruler b { color: var(--ink); font-weight: 500; }
+
+/* stage */
+.stage { height: 500vh; position: relative; }
+.pin { position: sticky; top: 0; height: 100vh; overflow: hidden; }
+.stage-grid { position: relative; height: 100%; display: grid; grid-template-columns: minmax(300px, 380px) 1fr; gap: 24px; padding: 72px var(--margin) 40px; }
+.chapters { list-style: none; margin: 0; padding: 0; display: grid; gap: 18px; align-content: start; }
+.chapters li { opacity: .28; transition: opacity var(--reveal) var(--out3); }
+.chapters li.on { opacity: 1; }
+.chapters .n { display: block; font: 500 .75rem/1.4 var(--mono); letter-spacing: .08em; color: var(--sub); text-transform: uppercase; }
+.chapters h2 { font-size: 1.5rem; margin: 2px 0 6px; }
+.chapters p { margin: 0; max-width: 40ch; }
+.figure { position: relative; min-height: 0; }
+.figure svg.draw { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.draw .face { fill: var(--bg); stroke: var(--dim); stroke-width: 1px; vector-effect: non-scaling-stroke; stroke-linejoin: miter; transition: stroke var(--reveal) var(--out3); }
+.draw .named .face { stroke: var(--ink); }
+.draw .named.amber .face { stroke: var(--amber); }
+.draw .named.steel .face { stroke: var(--steel); }
+.draw .named.green .face { stroke: var(--green); }
+.draw .tick { stroke: var(--hair); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+.draw .tick-label { fill: var(--sub); font: 400 11px var(--mono); }
+.labels { list-style: none; margin: 0; padding: 0; position: absolute; display: grid; gap: 10px; z-index: 2; }
+.labels.left { left: var(--margin); bottom: 40px; }
+.labels.right { right: var(--margin); top: 72px; text-align: right; justify-items: end; }
+.label { opacity: 0; transition: opacity var(--reveal) var(--out3); font-size: .875rem; white-space: nowrap; display: flex; align-items: center; gap: 8px; } /* .875rem: exploded-blueprint-mono#9 */
+.label.on { opacity: 1; }
+.label .dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--dot, var(--ink)); flex: none; } /* exploded-blueprint-mono#8 */
+.label .v { color: var(--sub); }
+.leaders { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+.leaders polyline { fill: none; stroke: var(--hair); stroke-width: 1px; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset var(--reveal) var(--out3); }
+.leaders polyline.on { stroke-dashoffset: 0; }
+
+/* evidence */
+.section { padding: 112px var(--margin); }
+.section .head { display: grid; gap: 12px; margin-bottom: 40px; max-width: 760px; }
+.section .head p { margin: 0; color: var(--sub); max-width: 62ch; }
+pre.notice { margin: 0; border: 1px solid var(--hair); padding: 20px; overflow-x: auto; font: 400 .8125rem/1.7 var(--mono); max-width: 1100px; }
+pre.notice .k { color: var(--steel); }
+pre.notice .g { color: var(--green); }
+.caption { margin-top: 12px; color: var(--sub); font-size: .75rem; }
+.ledger { width: 100%; max-width: 1100px; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.ledger th, .ledger td { text-align: right; padding: 10px 12px; border-top: 1px solid var(--hair); font-weight: 400; }
+.ledger th:first-child, .ledger td:first-child { text-align: left; padding-left: 0; }
+.ledger thead th { font: 500 .75rem var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--sub); border-top: 0; }
+.ledger tfoot td { border-top: 1px solid var(--ink); font-weight: 500; }
+.ratios { display: flex; flex-wrap: wrap; gap: 12px 48px; margin-top: 28px; }
+.ratios div { display: grid; }
+.ratios b { font: 800 2.25rem/1 var(--display); font-stretch: 125%; font-variation-settings: "wdth" 125; }
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 48px; max-width: 1100px; }
+.rows { margin: 0; display: grid; grid-template-columns: max-content 1fr; }
+.rows dt, .rows dd { margin: 0; padding: 10px 0; border-top: 1px solid var(--hair); }
+.rows dt { padding-right: 24px; color: var(--sub); }
+.stack-cmds { display: grid; gap: 10px; }
+footer { padding: 40px var(--margin) 56px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; color: var(--sub); font-size: .75rem; border-top: 1px solid var(--hair); }
+
+@media (max-width: 820px) {
+  .hero .ruler { position: static; text-align: left; }
+  .pin { display: flex; flex-direction: column; }
+  .stage-grid { flex: 1 1 auto; min-height: 0; height: auto; grid-template-columns: 1fr; grid-template-rows: auto minmax(200px, 1fr); padding: 56px var(--margin) 8px; gap: 8px; }
+  .labels.left { padding: 0 var(--margin); }
+  .labels.right { padding: 0 var(--margin) 16px; }
+  .chapters li { display: none; }
+  .chapters li.on { display: block; }
+  .chapters h2 { font-size: 1.25rem; }
+  .labels { position: static; gap: 4px; }
+  .labels.right { justify-items: start; text-align: left; }
+  .label { font-size: .75rem; white-space: normal; }
+  .label:not(.on) { display: none; }
+  .leaders { display: none; }
+  .two { grid-template-columns: 1fr; }
+  .ledger .wide { display: none; }
+  .section { padding: 72px var(--margin); }
+}
+/* Reduced motion: a static, complete page. No sticky stage, no scrub, no transitions. */
+.static .stage { height: auto; }
+.static .pin { position: relative; height: 100vh; min-height: 640px; }
+.static .chapters li { opacity: 1; display: block; }
+.static * { transition: none !important; }
+</style>
+</head>
+<body>
+<header class="bar">
+  <span class="kicker">smart-compact</span>
+  <nav class="kicker"><a href="#install">Install</a><a href="https://github.com/ryanonline1234/smart-compact">GitHub</a></nav>
+</header>
+
+<main>
+<section class="hero wrap" data-scene="hero" data-ground="a">
+  <div class="kicker">A Claude Code plugin · v0.1.0</div>
+  <h1 data-motion="hero-claim">Compact without forgetting.</h1>
+  <p class="lede">Checkpoint the session to disk, let it compact automatically, and rehydrate only when you choose, with the cost of rehydrating measured on disk before anything is wiped.</p>
+  <div class="cmd"><code>claude plugin marketplace add ryanonline1234/smart-compact</code><button type="button" data-copy="claude plugin marketplace add ryanonline1234/smart-compact">Copy</button></div>
+  <div class="ruler" aria-hidden="true">prose <b>2.73</b> chars/token<br>code <b>2.49</b> chars/token<br>7-file error <b>+0.5%</b></div>
+</section>
+
+<section class="stage" data-scene="stage" data-ground="a" aria-label="How it works, in four steps">
+  <div class="pin" data-pin="stage">
+    <div class="stage-grid">
+      <ol class="chapters">
+        <li data-motion="chapter-1" class="on"><span class="n">01 · Fill</span><h2>Context fills.</h2><p>51k tokens of system prompt, tools and memory are fixed. The conversation grows on top: 40k here, 91k in all.</p></li>
+        <li data-motion="chapter-2"><span class="n">02 · Save</span><h2>Checkpoint first.</h2><p><code>/smart-compact:save</code> writes a checkpoint and measures every file its manifest lists, before anything is wiped.</p></li>
+        <li data-motion="chapter-3"><span class="n">03 · Compact</span><h2>Then compact.</h2><p>When the turn ends, the plugin runs <code>/compact</code>: 91k becomes 28k by the engine's count. Compaction puts the checkpoint back by itself.</p></li>
+        <li data-motion="chapter-4"><span class="n">04 · Rehydrate</span><h2>Rebuild if you want.</h2><p>Your call. <code>/smart-compact:rehydrate</code> re-reads the manifest: ≈14.3k estimated at save, 15.2k when it ran.</p></li>
+      </ol>
+      <div class="figure" aria-hidden="true">
+        <svg class="draw" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+    </div>
+    <ul class="labels left">
+      <li class="label" data-label="conversation" data-show="0.06,1" data-anchor="conv:left"><span class="dot" style="--dot:var(--steel)"></span><span class="t">conversation · 40k tokens</span></li>
+      <li class="label" data-label="fixed" data-show="0,1" data-anchor="fixed:left"><span class="dot" style="--dot:var(--sub)"></span><span>system prompt, tools, memory · 51k tokens</span></li>
+    </ul>
+    <ul class="labels right">
+      <li class="label" data-label="checkpoint" data-show="0.31,1" data-anchor="ckpt:right"><span class="t">checkpoint · 0.8k tokens</span><span class="dot" style="--dot:var(--amber)"></span></li>
+      <li class="label" data-label="state" data-show="0.33,1" data-anchor="state:right"><span>docs/STATE.md · 7.6k measured</span><span class="dot" style="--dot:var(--amber)"></span></li>
+      <li class="label" data-label="auth" data-show="0.35,1" data-anchor="auth:right"><span>src/auth.ts · 6.7k measured</span><span class="dot" style="--dot:var(--amber)"></span></li>
+      <li class="label" data-label="rehydrate" data-show="0.9,1" data-anchor="state:top"><span>rehydrate adds ≈14.3k · 15.2k real</span><span class="dot" style="--dot:var(--green)"></span></li>
+    </ul>
+    <svg class="leaders" aria-hidden="true"></svg>
+  </div>
+</section>
+
+<div data-scene="evidence">
+<section class="section" data-ground="a">
+  <div class="head">
+    <div class="kicker">After compaction</div>
+    <h2>The notice says what rehydrating costs.</h2>
+    <p>Measured at save, then corrected for the files compaction already put back. You decide with numbers, not a guess.</p>
+  </div>
+  <pre class="notice">smart-compact: compacted (91k → 28k tokens); the system prompt and tools come on top.
+<span class="g">Rehydrate would add ≈14k tokens, measured at save, budget 150k:</span>
+  files: 2 ≈14k measured: docs/STATE.md 7.6k; src/auth.ts 6.7k
+  checkpoint itself: <span class="k">already back</span>
+  <span class="k">already back after compaction, so skipped:</span> src/decoder.py
+Send /smart-compact:rehydrate to rebuild context from it, or keep working from the summary.</pre>
+  <div class="caption">End-to-end run on Sonnet 5.5, 3 November 2026. Rehydrate then read those two files: 15.2k tokens at measured rates.</div>
+</section>
+
+<section class="section" data-ground="b">
+  <div class="head">
+    <div class="kicker">Measured, not assumed</div>
+    <h2>Every token count is calibrated.</h2>
+    <p>Seven files, each read in a turn of its own on a real model; the cost is the context growth across the read. Sonnet 5.5 and Opus 5.5 counted identically. The usual rules of thumb, 4 and 3.2 characters per token, undercount by 1.3 to 1.5 times.</p>
+  </div>
+  <table class="ledger" data-motion="ledger-table">
+    <thead><tr><th>File</th><th class="wide">Characters</th><th>Real tokens</th><th>Estimate</th><th>Error</th></tr></thead>
+    <tbody>
+      <tr><td>Claude Code docs page (md)</td><td class="wide">19,943</td><td>7,665</td><td>7,647</td><td>−0.2%</td></tr>
+      <tr><td>Claude Code docs page 2 (md)</td><td class="wide">9,228</td><td>3,545</td><td>3,464</td><td>−2.3%</td></tr>
+      <tr><td>synthetic notes (md)</td><td class="wide">8,710</td><td>3,108</td><td>3,244</td><td>+4.4%</td></tr>
+      <tr><td>JavaScript library file</td><td class="wide">19,060</td><td>8,452</td><td>8,602</td><td>+1.8%</td></tr>
+      <tr><td>Python json/decoder.py</td><td class="wide">12,872</td><td>5,642</td><td>5,756</td><td>+2.0%</td></tr>
+      <tr><td>Python json/encoder.py</td><td class="wide">16,148</td><td>6,433</td><td>7,200</td><td>+11.9%</td></tr>
+      <tr><td>synthetic TypeScript</td><td class="wide">15,190</td><td>7,530</td><td>6,685</td><td>−11.2%</td></tr>
+    </tbody>
+    <tfoot><tr><td>All seven</td><td class="wide">101,151</td><td>42,375</td><td>42,598</td><td>+0.5%</td></tr></tfoot>
+  </table>
+  <div class="ratios">
+    <div><b>2.73</b><span>characters per token, prose</span></div>
+    <div><b>2.49</b><span>characters per token, code</span></div>
+    <div><b>±12%</b><span>worst single file</span></div>
+  </div>
+</section>
+
+<section class="section" id="install" data-ground="a">
+  <div class="head">
+    <div class="kicker">Install</div>
+    <h2>Two commands.</h2>
+    <p>Requires Claude Code 2.1.309 or later with mods enabled, the default from 2.1.287. Tested in the desktop app and the CLI.</p>
+  </div>
+  <div class="stack-cmds">
+    <div class="cmd" data-motion="install-command"><code>claude plugin marketplace add ryanonline1234/smart-compact</code><button type="button" data-copy="claude plugin marketplace add ryanonline1234/smart-compact">Copy</button></div>
+    <div class="cmd"><code>claude plugin install smart-compact@smart-compact</code><button type="button" data-copy="claude plugin install smart-compact@smart-compact">Copy</button></div>
+  </div>
+  <div class="two" style="margin-top:56px">
+    <div>
+      <div class="kicker" style="margin-bottom:12px">Commands</div>
+      <dl class="rows">
+        <dt>/smart-compact:save [budget]</dt><dd>Checkpoint, then compact when the turn ends. The budget caps a later rehydrate; default 150k.</dd>
+        <dt>/smart-compact:rehydrate [path] [budget]</dt><dd>Re-read the checkpoint and its manifest, skipping what is already in context. Only you can start it.</dd>
+        <dt>suggestAt</dt><dd>Context size, in tokens, at which the plugin suggests saving once. 0 means 60% of the window; −1 turns it off.</dd>
+      </dl>
+    </div>
+    <div>
+      <div class="kicker" style="margin-bottom:12px">What its code can touch</div>
+      <dl class="rows">
+        <dt>Reads</dt><dd>files your checkpoint lists, the session transcript, HOME</dd>
+        <dt>Runs</dt><dd>/compact, once per save</dd>
+        <dt>Writes</dt><dd>transcript notices and a prompt suggestion</dd>
+        <dt>Never</dt><dd>network, file writes, processes</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+</div>
+</main>
+
+<footer data-ground="a">
+  <span>MIT · <a href="https://github.com/ryanonline1234/smart-compact">github.com/ryanonline1234/smart-compact</a></span>
+  <span>An independent project. Not affiliated with Anthropic.</span>
+</footer>
+
+<script>
+(() => {
+  const NS = 'http://www.w3.org/2000/svg'
+  const K = 1 / 400                         // DECISION: 1 viewBox unit per 400 tokens, so heights are proportional
+  const RV = [0.8660254, -0.5], LV = [-0.8660254, -0.5]
+  const MAIN = { W: 240, D: 150 }, PIECE = { W: 150, D: 95 }
+  const F = [280, 540]                      // front-bottom corner of the stack
+  const FIXED_H = 51000 * K
+  const OUT = [[585, 235], [620, 315], [655, 395]]   // exploded front corners: checkpoint, STATE.md, auth.ts (DECISION: clear of the stack's right face)
+  const PIECES = [
+    { id: 'ckpt', tokens: 800, accent: 'amber' },
+    { id: 'state', tokens: 7600, accent: 'amber' },
+    { id: 'auth', tokens: 6700, accent: 'amber' },
+  ]
+  const lerp = (a, b, t) => a + (b - a) * t
+  const seg = (s, a, b) => Math.max(0, Math.min(1, (s - a) / (b - a)))
+  const add = (p, v, k) => [p[0] + v[0] * k, p[1] + v[1] * k]
+  const fmtK = n => (n < 10000 ? (n / 1000).toFixed(1) : Math.round(n / 1000)) + 'k'
+
+  // The one stage-local progress s and everything derived from it (scroll-spec.json).
+  const tokensAt = s => (s < 0.5 ? lerp(2000, 40000, seg(s, 0, 0.2)) : lerp(40000, 28000, seg(s, 0.5, 0.7)))
+  const posAt = (id, s) => seg(s, 0.25, 0.45) + (id === 'ckpt' ? seg(s, 0.6, 0.7) : seg(s, 0.75, 0.95))
+  const chapterAt = s => (s < 0.25 ? 1 : s < 0.5 ? 2 : s < 0.75 ? 3 : 4)
+
+  const svg = document.querySelector('svg.draw')
+  const leaders = document.querySelector('svg.leaders')
+  const pin = document.querySelector('[data-pin="stage"]')
+  const stage = document.querySelector('[data-scene="stage"]')
+  const chapters = [...document.querySelectorAll('.chapters li')]
+  const labels = [...document.querySelectorAll('.label')]
+  const isStatic = matchMedia('(prefers-reduced-motion: reduce)').matches
+  if (isStatic) document.documentElement.classList.add('static')
+
+  function el(name, attrs, parent) {
+    const node = document.createElementNS(NS, name)
+    for (const k in attrs) node.setAttribute(k, attrs[k])
+    parent.appendChild(node)
+    return node
+  }
+
+  // A hairline box: three visible faces, filled with the ground so nearer boxes occlude.
+  function makeBox(id, motion) {
+    const g = el('g', { 'data-id': id }, svg)
+    if (motion) g.setAttribute('data-motion', motion)
+    const faces = ['left', 'right', 'top'].map(f => el('polygon', { class: 'face' }, g))
+    return { g, faces }
+  }
+  function placeBox(box, front, z, h, size) {
+    const f0 = [front[0], front[1] - z], f1 = [front[0], front[1] - z - h]
+    const r0 = add(f0, RV, size.W), r1 = add(f1, RV, size.W), l0 = add(f0, LV, size.D), l1 = add(f1, LV, size.D)
+    const b1 = add(r1, LV, size.D)
+    const pts = q => q.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ')
+    box.faces[0].setAttribute('points', pts([f0, l0, l1, f1]))
+    box.faces[1].setAttribute('points', pts([f0, r0, r1, f1]))
+    box.faces[2].setAttribute('points', pts([f1, r1, b1, l1]))
+    box.anchor = {
+      left: [(f0[0] + l0[0] + l1[0] + f1[0]) / 4, (f0[1] + l0[1] + l1[1] + f1[1]) / 4],
+      right: [(f0[0] + r0[0] + r1[0] + f1[0]) / 4, (f0[1] + r0[1] + r1[1] + f1[1]) / 4],
+      top: [(f1[0] + b1[0]) / 2, (f1[1] + b1[1]) / 2],
+    }
+  }
+
+  // Token ruler: the drawing is an instrument, so it carries its own scale.
+  const ruler = el('g', {}, svg)
+  el('line', { class: 'tick', x1: 70, y1: F[1], x2: 70, y2: F[1] - 100000 * K }, ruler)
+  for (let t = 0; t <= 100000; t += 10000) {
+    const y = F[1] - t * K
+    el('line', { class: 'tick', x1: 70, y1: y, x2: t % 50000 === 0 ? 58 : 64, y2: y }, ruler)
+    if (t % 50000 === 0) el('text', { class: 'tick-label', x: 52, y: y + 4, 'text-anchor': 'end' }, ruler).textContent = t === 0 ? '0' : fmtK(t)
+  }
+  const boxes = {
+    fixed: makeBox('fixed'),
+    conv: makeBox('conv', 'slab-conversation'),
+  }
+  for (const p of PIECES) boxes[p.id] = makeBox(p.id, p.id === 'ckpt' ? 'slab-checkpoint' : p.id === 'state' ? 'slab-state' : null)
+
+  const centered = add(add(F, RV, (MAIN.W - PIECE.W) / 2), LV, (MAIN.D - PIECE.D) / 2)
+  const named = { 1: ['conv'], 2: ['ckpt', 'state', 'auth'], 3: ['conv', 'ckpt'], 4: ['state', 'auth'] }
+  const accentOf = { 1: { conv: '' }, 2: { ckpt: 'amber', state: 'amber', auth: 'amber' }, 3: { conv: 'steel', ckpt: 'steel' }, 4: { state: 'green', auth: 'green' } }
+
+  function render(s) {
+    pin.style.setProperty('--stage-progress', s.toFixed(4))
+    const tokens = tokensAt(s)
+    const convH = tokens * K
+    placeBox(boxes.fixed, F, 0, FIXED_H, MAIN)
+    placeBox(boxes.conv, F, FIXED_H, convH, MAIN)
+    boxes.conv.g.style.setProperty('--tokens', Math.round(tokens))
+
+    let stackZ = FIXED_H + convH
+    for (const [i, p] of PIECES.entries()) {
+      const pos = posAt(p.id, s)
+      const h = Math.max(5, p.tokens * K)
+      const inside = [centered[0], centered[1] - FIXED_H - convH / 2]
+      let front
+      if (pos <= 1) {
+        front = [lerp(inside[0], OUT[i][0], pos), lerp(inside[1], OUT[i][1], pos)]
+      } else {
+        const onStack = [centered[0], centered[1] - stackZ]
+        front = [lerp(OUT[i][0], onStack[0], pos - 1), lerp(OUT[i][1], onStack[1], pos - 1)]
+      }
+      if (pos >= 2) stackZ += h
+      placeBox(boxes[p.id], front, 0, h, PIECE)
+      boxes[p.id].g.style.setProperty('--pos', pos.toFixed(4))
+      boxes[p.id].g.style.opacity = pos < 0.02 ? 0 : 1
+    }
+
+    const ch = chapterAt(s)
+    for (const id in boxes) {
+      const on = named[ch].includes(id)
+      boxes[id].g.setAttribute('class', on ? 'named ' + (accentOf[ch][id] || '') : '')
+    }
+    chapters.forEach((li, i) => li.classList.toggle('on', i + 1 === ch || isStatic))
+
+    // Label texts that follow the drawing.
+    const conv = document.querySelector('[data-label="conversation"] .t')
+    conv.textContent = s < 0.5 ? `conversation · ${fmtK(tokens)} tokens` : `after compaction · ${fmtK(tokens)} tokens, engine count`
+    document.querySelector('[data-label="checkpoint"] .t').textContent = s < 0.7 ? 'checkpoint · 0.8k tokens' : 'checkpoint · 0.8k · back in full'
+
+    // Reveals: newly shown labels fade in 250ms out(3), staggered 10ms from the last (exploded-blueprint-mono#2);
+    // their leader lines draw on 50ms behind.
+    const changed = []
+    for (const label of labels) {
+      const [a, b] = label.dataset.show.split(',').map(Number)
+      const want = isStatic || (s >= a && s <= b)   // reduced motion: every label, at once
+      if (want !== label.classList.contains('on')) changed.push([label, want])
+    }
+    changed.forEach(([label, want], i) => {
+      const delay = (changed.length - 1 - i) * 10
+      label.style.transitionDelay = want ? delay + 'ms' : '0ms'
+      label.classList.toggle('on', want)
+      label.line && (label.line.style.transitionDelay = want ? delay + 50 + 'ms' : '0ms', label.line.classList.toggle('on', want))
+    })
+    drawLeaders()
+  }
+
+  // Leader lines: from 4px off the label (exploded-blueprint-mono#1), a horizontal run, then a
+  // diagonal that is exactly 45 degrees whenever there is room.
+  for (const label of labels) {
+    label.line = el('polyline', { pathLength: 1 }, leaders)
+  }
+  function drawLeaders() {
+    const host = pin.getBoundingClientRect()
+    const ctm = svg.getScreenCTM()
+    if (!ctm) return
+    for (const label of labels) {
+      const [id, face] = label.dataset.anchor.split(':')
+      const box = boxes[id]
+      if (!box || !box.anchor) continue
+      const pt = svg.createSVGPoint(); [pt.x, pt.y] = box.anchor[face]
+      const a = pt.matrixTransform(ctm)
+      const ax = a.x - host.left, ay = a.y - host.top
+      const r = label.getBoundingClientRect()
+      const fromLeft = label.parentElement.classList.contains('left')
+      const sx = fromLeft ? r.right - host.left + 4 : r.left - host.left - 4
+      const sy = r.top + r.height / 2 - host.top
+      const dx = ax - sx, dy = ay - sy
+      const d = Math.min(Math.abs(dy), Math.abs(dx))
+      const ex = ax - Math.sign(dx) * d
+      label.line.setAttribute('points', `${sx},${sy} ${ex},${sy} ${ax},${ay}`)
+    }
+  }
+
+  function progress() {
+    if (isStatic) return 0.45   // reduced motion: the saved state, every part out and labelled
+    const r = stage.getBoundingClientRect()
+    const travel = r.height - innerHeight
+    return travel > 0 ? Math.max(0, Math.min(1, -r.top / travel)) : 0
+  }
+  let queued = false
+  const schedule = () => {
+    if (queued) return
+    queued = true
+    requestAnimationFrame(() => { queued = false; render(progress()) })
+  }
+  if (!isStatic) addEventListener('scroll', schedule, { passive: true })
+  addEventListener('resize', schedule)
+  render(progress())
+
+  // Copy buttons
+  for (const button of document.querySelectorAll('[data-copy]')) {
+    button.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(button.dataset.copy); button.textContent = 'Copied' }
+      catch { button.textContent = 'Select it' }
+      setTimeout(() => (button.textContent = 'Copy'), 1600)
+    })
+  }
+})()
+</script>
+</body>
+</html>

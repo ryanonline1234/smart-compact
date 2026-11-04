@@ -1,0 +1,15 @@
+{
+  "name": "smart-compact",
+  "description": "smart-compact: checkpoint, compact automatically, rehydrate on your terms.",
+  "owner": {
+    "name": "Ryan Tseng",
+    "url": "https://github.com/ryanonline1234"
+  },
+  "plugins": [
+    {
+      "name": "smart-compact",
+      "source": "./",
+      "description": "Checkpoint before compacting, compact automatically, rehydrate on your terms with a measured estimate."
+    }
+  ]
+}

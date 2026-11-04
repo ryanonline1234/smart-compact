@@ -1,0 +1,532 @@
+{
+  "specVersion": 1,
+  "name": "smart-compact-site-desktop",
+  "description": "Written before the page. Hero (one viewport), then a sticky 500vh stage that scrubs one stage-local progress s through four chapters: FILL [0,.25), SAVE [.25,.5), COMPACT [.5,.75), REHYDRATE [.75,1]. Every scrubbed value is a linear function of s (family: exploded-blueprint-mono, scroll seeks one timeline); label and chapter reveals are 250ms cubic-out time transitions (exploded-blueprint-mono#2). Token numbers are the e2e run of 2026-11-03 (91k before, 28k engine count after, manifest STATE.md 7.6k + auth.ts 6.7k, checkpoint 0.8k). Total height corrected to the measured 8098px after the first capture (spec assumed 7600).",
+  "url": "http://localhost:4321/",
+  "viewport": {
+    "width": 1440,
+    "height": 900,
+    "dpr": 1,
+    "colorScheme": "dark",
+    "reducedMotion": "no-preference"
+  },
+  "scroll": {
+    "totalHeightPx": 8098,
+    "totalHeightTolerancePx": 120,
+    "scrollAccuracyTolerancePx": 4,
+    "sampleMatchWindow": 0.006
+  },
+  "settleMinMs": 0,
+  "settleMaxMs": 1500,
+  "positions": [
+    0,
+    0.02,
+    0.04,
+    0.06,
+    0.08,
+    0.1,
+    0.12,
+    0.125035,
+    0.13,
+    0.134328,
+    0.135038,
+    0.14,
+    0.145074,
+    0.15,
+    0.150042,
+    0.16,
+    0.161194,
+    0.17,
+    0.175049,
+    0.18,
+    0.185052,
+    0.188059,
+    0.19,
+    0.198806,
+    0.2,
+    0.21,
+    0.22,
+    0.225063,
+    0.23,
+    0.24,
+    0.241791,
+    0.25,
+    0.25007,
+    0.26,
+    0.268656,
+    0.27,
+    0.28,
+    0.29,
+    0.3,
+    0.300084,
+    0.31,
+    0.310086,
+    0.32,
+    0.322388,
+    0.33,
+    0.333134,
+    0.34,
+    0.35,
+    0.350098,
+    0.36,
+    0.37,
+    0.375105,
+    0.376119,
+    0.38,
+    0.39,
+    0.4,
+    0.402985,
+    0.41,
+    0.42,
+    0.425118,
+    0.43,
+    0.435121,
+    0.44,
+    0.45,
+    0.456716,
+    0.46,
+    0.467463,
+    0.47,
+    0.475132,
+    0.48,
+    0.49,
+    0.5,
+    0.500139,
+    0.51,
+    0.510448,
+    0.52,
+    0.53,
+    0.537313,
+    0.54,
+    0.55,
+    0.550153,
+    0.56,
+    0.560156,
+    0.57,
+    0.58,
+    0.59,
+    0.591045,
+    0.6,
+    0.600167,
+    0.601791,
+    0.61,
+    0.61017,
+    0.62,
+    0.625174,
+    0.63,
+    0.64,
+    0.644776,
+    0.65,
+    0.655523,
+    0.66,
+    0.67,
+    0.671642,
+    0.7,
+    0.737622,
+    0.75,
+    0.770149,
+    0.8,
+    0.85,
+    0.9,
+    0.95,
+    1
+  ],
+  "targets": {
+    "hero-section": "[data-scene='hero']",
+    "hero-claim": "[data-motion='hero-claim']",
+    "stage-section": "[data-scene='stage']",
+    "stage-pin": {
+      "selector": "[data-pin='stage']",
+      "vars": [
+        "--stage-progress"
+      ]
+    },
+    "slab-conversation": {
+      "selector": "[data-motion='slab-conversation']",
+      "vars": [
+        "--tokens"
+      ]
+    },
+    "slab-state": {
+      "selector": "[data-motion='slab-state']",
+      "vars": [
+        "--pos"
+      ]
+    },
+    "slab-checkpoint": {
+      "selector": "[data-motion='slab-checkpoint']",
+      "vars": [
+        "--pos"
+      ]
+    },
+    "chapter-1": "[data-motion='chapter-1']",
+    "chapter-2": "[data-motion='chapter-2']",
+    "chapter-3": "[data-motion='chapter-3']",
+    "chapter-4": "[data-motion='chapter-4']",
+    "label-conversation": "[data-label='conversation']",
+    "label-rehydrate": "[data-label='rehydrate']",
+    "ledger-section": "[data-scene='evidence']",
+    "ledger-table": "[data-motion='ledger-table']",
+    "install-command": "[data-motion='install-command']"
+  },
+  "scenes": [
+    {
+      "id": "hero",
+      "label": "Hero: one claim, one install line",
+      "selector": "[data-scene='hero']",
+      "rangePx": {
+        "fromPx": 0,
+        "toPx": 900
+      },
+      "expectations": [
+        {
+          "id": "hero-claim-painted",
+          "target": "hero-claim",
+          "property": "effectiveOpacity",
+          "tolerance": 0.03,
+          "mustChange": false,
+          "keys": [
+            {
+              "localProgress": 0,
+              "value": 1,
+              "label": "painted at the top, no load gate"
+            }
+          ],
+          "note": "Content is never gated behind motion: the claim is visible on first paint."
+        }
+      ]
+    },
+    {
+      "id": "stage",
+      "label": "Sticky stage: the context window, exploded",
+      "selector": "[data-scene='stage']",
+      "rangePx": {
+        "fromPx": 900,
+        "toPx": 4500
+      },
+      "pin": {
+        "pins": true,
+        "selector": "[data-pin='stage']",
+        "driftTolerancePx": 2,
+        "expectedTopPx": 0
+      },
+      "expectations": [
+        {
+          "id": "stage-pin-holds",
+          "target": "stage-pin",
+          "property": "rect.top",
+          "tolerance": 2,
+          "mustChange": false,
+          "keys": [
+            {
+              "localProgress": 0.05,
+              "value": 0,
+              "label": "just pinned"
+            },
+            {
+              "localProgress": 0.5,
+              "value": 0,
+              "label": "mid"
+            },
+            {
+              "localProgress": 0.95,
+              "value": 0,
+              "label": "about to release"
+            }
+          ],
+          "note": "position: sticky on a 100vh child of a 500vh section; constancy is the assertion."
+        },
+        {
+          "id": "stage-progress",
+          "target": "stage-pin",
+          "property": "cssVar",
+          "cssVarName": "--stage-progress",
+          "tolerance": 0.02,
+          "monotonic": "increasing",
+          "keys": [
+            {
+              "localProgress": 0,
+              "value": 0
+            },
+            {
+              "localProgress": 0.5,
+              "value": 0.5
+            },
+            {
+              "localProgress": 1,
+              "value": 1
+            }
+          ],
+          "easeRef": "linear by construction: the raw stage-local scroll fraction every scrubbed value reads",
+          "note": "Read this line first: if s is wrong, every failure below is a symptom."
+        },
+        {
+          "id": "conversation-fills-then-compacts",
+          "target": "slab-conversation",
+          "property": "cssVar",
+          "cssVarName": "--tokens",
+          "tolerance": 600,
+          "keys": [
+            {
+              "localProgress": 0,
+              "value": 2000,
+              "label": "empty conversation"
+            },
+            {
+              "localProgress": 0.1,
+              "value": 21000,
+              "label": "half full"
+            },
+            {
+              "localProgress": 0.2,
+              "value": 40000,
+              "label": "full: 91k with the 51k fixed block"
+            },
+            {
+              "localProgress": 0.45,
+              "value": 40000,
+              "label": "held through SAVE"
+            },
+            {
+              "localProgress": 0.6,
+              "value": 34000,
+              "label": "compacting"
+            },
+            {
+              "localProgress": 0.7,
+              "value": 28000,
+              "label": "compacted: engine count"
+            },
+            {
+              "localProgress": 1,
+              "value": 28000,
+              "label": "held"
+            }
+          ],
+          "easeRef": "none: linear scrub on [0,.2] and [.5,.7]; easing a scrub reads as lag against the scrollbar"
+        },
+        {
+          "id": "manifest-explodes-then-returns",
+          "target": "slab-state",
+          "property": "cssVar",
+          "cssVarName": "--pos",
+          "tolerance": 0.04,
+          "monotonic": "increasing",
+          "keys": [
+            {
+              "localProgress": 0.2,
+              "value": 0,
+              "label": "inside the conversation"
+            },
+            {
+              "localProgress": 0.35,
+              "value": 0.5
+            },
+            {
+              "localProgress": 0.45,
+              "value": 1,
+              "label": "exploded out"
+            },
+            {
+              "localProgress": 0.75,
+              "value": 1,
+              "label": "held outside through COMPACT"
+            },
+            {
+              "localProgress": 0.85,
+              "value": 1.5
+            },
+            {
+              "localProgress": 0.95,
+              "value": 2,
+              "label": "back on the stack: rehydrated"
+            }
+          ],
+          "easeRef": "none: linear scrub on [.25,.45] and [.75,.95]"
+        },
+        {
+          "id": "checkpoint-comes-back-at-compaction",
+          "target": "slab-checkpoint",
+          "property": "cssVar",
+          "cssVarName": "--pos",
+          "tolerance": 0.04,
+          "monotonic": "increasing",
+          "keys": [
+            {
+              "localProgress": 0.25,
+              "value": 0
+            },
+            {
+              "localProgress": 0.45,
+              "value": 1,
+              "label": "exploded out"
+            },
+            {
+              "localProgress": 0.6,
+              "value": 1
+            },
+            {
+              "localProgress": 0.7,
+              "value": 2,
+              "label": "re-attached by compaction"
+            }
+          ],
+          "easeRef": "none: linear scrub on [.25,.45] and [.6,.7]"
+        },
+        {
+          "id": "chapter-2-active-only-in-save",
+          "target": "chapter-2",
+          "property": "opacity",
+          "tolerance": 0.03,
+          "keys": [
+            {
+              "localProgress": 0.12,
+              "value": 0.28,
+              "label": "dimmed"
+            },
+            {
+              "localProgress": 0.37,
+              "value": 1,
+              "label": "active"
+            },
+            {
+              "localProgress": 0.62,
+              "value": 0.28,
+              "label": "dimmed again"
+            }
+          ],
+          "easeRef": "250ms cubic-out per exploded-blueprint-mono entry (out(3)); time-based, measured after settle"
+        },
+        {
+          "id": "chapter-4-active-in-rehydrate",
+          "target": "chapter-4",
+          "property": "opacity",
+          "tolerance": 0.03,
+          "keys": [
+            {
+              "localProgress": 0.62,
+              "value": 0.28
+            },
+            {
+              "localProgress": 0.87,
+              "value": 1
+            }
+          ]
+        },
+        {
+          "id": "conversation-label-reveals",
+          "target": "label-conversation",
+          "property": "opacity",
+          "tolerance": 0.03,
+          "keys": [
+            {
+              "localProgress": 0.02,
+              "value": 0,
+              "label": "hidden before the slab exists"
+            },
+            {
+              "localProgress": 0.12,
+              "value": 1,
+              "label": "revealed"
+            }
+          ]
+        },
+        {
+          "id": "rehydrate-label-reveals-last",
+          "target": "label-rehydrate",
+          "property": "opacity",
+          "tolerance": 0.03,
+          "keys": [
+            {
+              "localProgress": 0.7,
+              "value": 0
+            },
+            {
+              "localProgress": 0.97,
+              "value": 1
+            }
+          ]
+        },
+        {
+          "id": "chapter-1-active-only-in-fill",
+          "target": "chapter-1",
+          "property": "opacity",
+          "tolerance": 0.03,
+          "keys": [
+            {
+              "localProgress": 0.1,
+              "value": 1,
+              "label": "active"
+            },
+            {
+              "localProgress": 0.37,
+              "value": 0.28,
+              "label": "dimmed"
+            }
+          ]
+        },
+        {
+          "id": "chapter-3-active-only-in-compact",
+          "target": "chapter-3",
+          "property": "opacity",
+          "tolerance": 0.03,
+          "keys": [
+            {
+              "localProgress": 0.37,
+              "value": 0.28
+            },
+            {
+              "localProgress": 0.62,
+              "value": 1,
+              "label": "active"
+            },
+            {
+              "localProgress": 0.87,
+              "value": 0.28
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "evidence",
+      "label": "Evidence and install: static, never gated",
+      "selector": "[data-scene='evidence']",
+      "rangePx": {
+        "fromPx": 4500,
+        "toPx": 7198
+      },
+      "expectations": [
+        {
+          "id": "ledger-painted",
+          "target": "ledger-table",
+          "property": "effectiveOpacity",
+          "tolerance": 0.03,
+          "mustChange": false,
+          "keys": [
+            {
+              "localProgress": 0.3,
+              "value": 1,
+              "label": "the calibration ledger is plain, readable content"
+            }
+          ],
+          "note": "No scroll reveal on evidence: the numbers are the point and must read without motion."
+        },
+        {
+          "id": "install-painted",
+          "target": "install-command",
+          "property": "effectiveOpacity",
+          "tolerance": 0.03,
+          "mustChange": false,
+          "keys": [
+            {
+              "localProgress": 1,
+              "value": 1,
+              "label": "install command visible at the bottom"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

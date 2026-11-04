@@ -1,0 +1,17 @@
+{
+  "name": "smart-compact",
+  "version": "0.1.0",
+  "description": "Checkpoint a Claude Code session before compacting, compact it automatically, and rehydrate on your terms with a measured estimate of what comes back.",
+  "author": { "name": "Ryan Tseng", "url": "https://github.com/ryanonline1234" },
+  "repository": "https://github.com/ryanonline1234/smart-compact",
+  "license": "MIT",
+  "keywords": ["compaction", "context", "checkpoint", "mod", "skills"],
+  "userConfig": {
+    "suggestAt": {
+      "type": "number",
+      "title": "Suggest saving at (tokens)",
+      "description": "Context size at which smart-compact suggests /smart-compact:save once. 0 means 60% of the model's context window; -1 turns the suggestion off.",
+      "default": 0
+    }
+  }
+}
