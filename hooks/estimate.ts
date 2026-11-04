@@ -11,7 +11,15 @@ export type ManifestItem = {
   why: string
 }
 
-export type Manifest = { budget?: number; cwd?: string; items: ManifestItem[] }
+export type Manifest = {
+  budget?: number
+  cwd?: string
+  /** The project the checkpoint belongs to; relative targets resolve against it before `cwd`. */
+  projectRoot?: string
+  /** The checkpoint this one follows, for the carry-forward check. */
+  previous?: string
+  items: ManifestItem[]
+}
 
 export type Measured = ManifestItem & {
   /** A Read target's absolute path, as resolved for measuring. */
@@ -66,15 +74,18 @@ function unquote(s: string): string {
   return s.replace(/^[`'"]+|[`'"]+$/g, '').trim()
 }
 
-/** The frontmatter's rebuild_budget and cwd, and §6's table rows. */
+/** The frontmatter's rebuild_budget, cwd, project_root and previous, and the manifest table's rows. */
 export function parseCheckpoint(text: string): Manifest {
   const front = text.match(/^---\n([\s\S]*?)\n---/)
   const field = (name: string) => front?.[1]?.match(new RegExp(`^${name}:\\s*(.+?)\\s*(?:#.*)?$`, 'm'))?.[1]
   const budgetText = field('rebuild_budget')
   const budget = budgetText === undefined ? undefined : parseTokens(budgetText)
   const cwd = field('cwd')
+  const projectRoot = field('project_root')
+  const previous = field('previous')
 
-  const section = text.match(/^##\s*6\.?[^\n]*\n([\s\S]*?)(?=^##\s|(?![\s\S]))/m)?.[1] ?? ''
+  // The manifest is found by its title, so a template that renumbers its sections still parses.
+  const section = text.match(/^##\s*(?:\d+\.?\s*)?[^\n]*manifest[^\n]*\n([\s\S]*?)(?=^##\s|(?![\s\S]))/im)?.[1] ?? ''
   const rows = section.split('\n').filter(l => l.trim().startsWith('|'))
   const header = rows.length > 0 ? cells(rows[0] ?? '').map(c => c.toLowerCase()) : []
   const col = (name: string, fallback: number) => {
@@ -93,19 +104,34 @@ export function parseCheckpoint(text: string): Manifest {
       why: c[iWhy] ?? '',
     })
   }
-  return { budget, cwd: cwd === undefined ? undefined : unquote(cwd), items }
+  const path = (v: string | undefined) => (v === undefined || /^(none|-|n\/a)$/i.test(unquote(v)) ? undefined : unquote(v))
+  return { budget, cwd: path(cwd), projectRoot: path(projectRoot), previous: path(previous), items }
 }
 
-/** A Read target as an absolute path plus its line range, or undefined. */
-export function readTarget(
-  target: string,
-  cwd: string | undefined,
-  home: string | undefined,
-): { path: string; start?: number; end?: number } | undefined {
+/** Where a Read target points: a whole file, a line range, a section by heading, or the last N entries. */
+export type Target = { path: string; start?: number; end?: number; section?: string; lastN?: number }
+
+/**
+ * A Read target as an absolute path plus what part of the file it means, or
+ * undefined. `path:80-240` is a line range; `path#Next action` is the section
+ * under the first heading starting with that text; `path#last 3` is the last
+ * three `##` entries, for append-only logs like DECISIONS.md.
+ */
+export function readTarget(target: string, root: string | undefined, home: string | undefined): Target | undefined {
   let t = unquote(target)
   let start: number | undefined
   let end: number | undefined
-  const range = t.match(/^(.*?):(\d+)(?:-(\d+))?$/)
+  let section: string | undefined
+  let lastN: number | undefined
+  const hash = t.indexOf('#')
+  if (hash > 0) {
+    const frag = t.slice(hash + 1).trim()
+    t = t.slice(0, hash)
+    const last = frag.match(/^last\s+(\d+)$/i)
+    if (last !== null) lastN = Number(last[1])
+    else if (frag !== '') section = frag
+  }
+  const range = section === undefined && lastN === undefined ? t.match(/^(.*?):(\d+)(?:-(\d+))?$/) : null
   if (range !== null) {
     t = range[1] ?? ''
     start = Number(range[2])
@@ -116,10 +142,54 @@ export function readTarget(
     if (home === undefined || home === '') return undefined
     t = `${home}${t.slice(1)}`
   } else if (!t.startsWith('/')) {
-    if (cwd === undefined || !cwd.startsWith('/')) return undefined
-    t = `${cwd.replace(/\/$/, '')}/${t}`
+    if (root === undefined || !root.startsWith('/')) return undefined
+    t = `${root.replace(/\/$/, '')}/${t}`
   }
-  return { path: t, start, end }
+  return { path: t, start, end, section, lastN }
+}
+
+function headingAt(line: string): { level: number; text: string } | undefined {
+  const m = line.match(/^(#{1,6})\s+(.*)$/)
+  return m === null ? undefined : { level: (m[1] ?? '').length, text: (m[2] ?? '').trim() }
+}
+
+/** The lines of the section under the first heading whose text starts with `title` (numbering ignored). */
+export function sectionRange(text: string, title: string): { from: number; to: number } | undefined {
+  const lines = text.split('\n')
+  const want = title.toLowerCase().replace(/^\d+\.?\s*/, '')
+  for (let i = 0; i < lines.length; i++) {
+    const h = headingAt(lines[i] ?? '')
+    if (h === undefined || !h.text.toLowerCase().replace(/^\d+\.?\s*/, '').startsWith(want)) continue
+    let j = i + 1
+    while (j < lines.length) {
+      const next = headingAt(lines[j] ?? '')
+      if (next !== undefined && next.level <= h.level) break
+      j += 1
+    }
+    return { from: i, to: j }
+  }
+  return undefined
+}
+
+/** The lines of the last `n` entries of an append-only log: from the n-th last `##` heading (or `###`) to the end. */
+export function lastEntriesRange(text: string, n: number): { from: number; to: number } | undefined {
+  const lines = text.split('\n')
+  for (const level of [2, 3]) {
+    const at = lines.flatMap((l, i) => (headingAt(l)?.level === level ? [i] : []))
+    if (at.length > 0) return { from: at[Math.max(0, at.length - n)] ?? 0, to: lines.length }
+  }
+  return undefined
+}
+
+/** Characters and lines a target costs, or `found: false` when its section is not in the file. */
+export function measureTarget(text: string, target: Target): { chars: number; lines: number; found: boolean } {
+  const range = target.section !== undefined ? sectionRange(text, target.section) : target.lastN !== undefined ? lastEntriesRange(text, target.lastN) : undefined
+  if ((target.section !== undefined || target.lastN !== undefined) && range === undefined) return { chars: 0, lines: 0, found: false }
+  if (range !== undefined) {
+    const picked = text.split('\n').slice(range.from, range.to)
+    return { chars: picked.reduce((n, l) => n + l.length + 1, 0), lines: picked.length, found: true }
+  }
+  return { ...sliceLines(text, target.start, target.end), found: true }
 }
 
 /** Characters and lines the Read tool would return for the range. */

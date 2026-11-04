@@ -3,6 +3,7 @@ one message per turn, stdin held open so queued commands (like the plugin's
 /compact) get an idle session to run in. Standard library only."""
 
 import json
+import os
 import queue
 import shutil
 import subprocess
@@ -26,9 +27,10 @@ def context_tokens(usage: dict) -> int:
 
 
 class Session:
-    def __init__(self, claude: str, cwd: Path, model: str, log_path: Path, extra: list[str]):
+    def __init__(self, claude: str, cwd: Path, model: str, log_path: Path, extra: list[str], env: dict[str, str] | None = None):
         args = [claude, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--model", model, *extra]
-        self.proc = subprocess.Popen(args, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        full_env = {**os.environ, **(env or {})}
+        self.proc = subprocess.Popen(args, cwd=cwd, env=full_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
         self.events: queue.Queue = queue.Queue()
         self.log = open(log_path, "w")
         threading.Thread(target=self._read, daemon=True).start()

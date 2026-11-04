@@ -1,6 +1,7 @@
 import type { Register } from 'claude-code'
-import { estimateDetails, estimateLine, estimateOf, fmtK, isRead, parseCheckpoint, reattachedFromTranscript, readTarget, sliceLines, tokensOf } from './estimate'
+import { estimateDetails, estimateLine, estimateOf, fmtK, isRead, measureTarget, parseCheckpoint, reattachedFromTranscript, readTarget, tokensOf } from './estimate'
 import type { Estimate, Manifest, Measured } from './estimate'
+import { carryForwardGaps, contractFrom, nudgeThreshold, pointerLine, PROFILE_PATH, withContract } from './ledger'
 
 // smart-compact's hooks module. /smart-compact:save writes a checkpoint, then
 // calls this module's tool instead of asking the person to paste /compact. The
@@ -8,6 +9,10 @@ import type { Estimate, Manifest, Measured } from './estimate'
 // compaction runs when that turn ends, by running /compact as if the person
 // typed it. Rehydrating stays the person's choice (/smart-compact:rehydrate).
 // Separately, once context passes `suggestAt`, it suggests /smart-compact:save.
+// Long-horizon additions (0.2): every compaction, automatic ones included,
+// carries a summary contract (standing rules, open decisions, counters) and the
+// latest checkpoint's pointer; a save that drops a rule or an open decision the
+// previous checkpoint held is refused until it carries or retires it.
 
 export const PLUGIN = 'smart-compact'
 export const TOOL = 'compact_after_turn'
@@ -66,6 +71,18 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+/** Pure: the refusal when a save drops what the previous checkpoint still needed. */
+export function carryForwardDeny(previous: string, gaps: { rules: string[]; decisions: string[] }): string | undefined {
+  if (gaps.rules.length === 0 && gaps.decisions.length === 0) return undefined
+  const list = (label: string, xs: string[]) => (xs.length === 0 ? [] : [`${label}: ${xs.map(x => `"${x}"`).join('; ')}.`])
+  return [
+    `Not queued: the previous checkpoint (${previous}) has items this one drops.`,
+    ...list(`${gaps.rules.length} standing rule(s)`, gaps.rules),
+    ...list(`${gaps.decisions.length} open decision(s)`, gaps.decisions),
+    'Carry each one into this checkpoint, or keep it as "retired: <item> (why)" or "answered: <item> (the answer)", then call this tool again.',
+  ].join(' ')
+}
+
 /** Pure: what the queue tool tells the model, with the estimate measured at save. */
 export function queuedReport(estimate: Estimate | undefined): string {
   const lines = ['Queued. Claude Code compacts this conversation as soon as this turn ends, with these instructions.']
@@ -94,8 +111,25 @@ export const register: Register = (on, options) => {
   // the window; -1: never), once per stretch between compactions.
   const suggestAt = typeof options.suggestAt === 'number' ? options.suggestAt : 0
   let isNudged = false
+  let autoCompactAt: number | undefined
+  let hasAskedThreshold = false
+  // The summary contract rides on every compaction unless turned off.
+  const isContractOn = options.summaryContract !== false
+  let home: string | undefined
+  /** The profile file: SMART_COMPACT_PROFILE when set (tests, other setups), else ~/.claude/smart-compact/profile.md. */
+  let profilePath: string | undefined
+  /** The newest checkpoint this session queued; later compactions keep pointing at it. */
+  let lastCheckpoint: { path: string; savedAt: string } | undefined
 
   on('session.start', async ($, e, next) => {
+    try {
+      home = await $.env.get('HOME')
+      const override = await $.env.get('SMART_COMPACT_PROFILE')
+      profilePath = override !== undefined && override !== '' ? override : home === undefined ? undefined : `${home}/${PROFILE_PATH}`
+    } catch {
+      home = undefined
+      profilePath = undefined
+    }
     await $.tool.register({
       name: TOOL,
       description:
@@ -138,26 +172,44 @@ export const register: Register = (on, options) => {
     try {
       const saved = await $.fs.read(request.checkpoint)
       const manifest = parseCheckpoint(saved)
-      const home = await $.env.get('HOME')
+      // Carry-forward: a save may not silently drop what the previous checkpoint still needed.
+      if (manifest.previous !== undefined) {
+        let prior: string | undefined
+        try {
+          prior = await $.fs.read(manifest.previous)
+        } catch {
+          prior = undefined // previous file gone: nothing to compare against
+        }
+        const refusal = prior === undefined ? undefined : carryForwardDeny(manifest.previous, carryForwardGaps(prior, saved))
+        if (refusal !== undefined) return { deny: refusal }
+      }
+      const root = manifest.projectRoot ?? manifest.cwd
       const measured: Measured[] = []
       for (const item of manifest.items) {
-        const target = isRead(item) ? readTarget(item.target, manifest.cwd, home) : undefined
+        const target = isRead(item) ? readTarget(item.target, root, home) : undefined
         if (target === undefined) {
           measured.push({ ...item, tokens: item.estTokens ?? 0, isMeasured: false })
           continue
         }
         try {
           const text = await $.fs.read(target.path)
-          const { chars, lines } = sliceLines(text, target.start, target.end)
-          measured.push({ ...item, path: target.path, tokens: tokensOf(target.path, chars, lines, text), isMeasured: true })
+          const m = measureTarget(text, target)
+          measured.push(
+            m.found
+              ? { ...item, path: target.path, tokens: tokensOf(target.path, m.chars, m.lines, text), isMeasured: true }
+              : { ...item, path: target.path, tokens: 0, isMeasured: false, isMissing: true },
+          )
         } catch {
           measured.push({ ...item, path: target.path, tokens: 0, isMeasured: false, isMissing: true })
         }
       }
       const checkpointTokens = tokensOf(request.checkpoint, saved.length, saved.split('\n').length, saved)
       pending = { ...request, estimate: estimateOf(manifest, measured, checkpointTokens), manifest, measured, checkpointTokens }
+      const created = saved.match(/^created:\s*(\S+)/m)?.[1]
+      lastCheckpoint = { path: request.checkpoint, savedAt: created ?? new Date().toISOString() }
     } catch {
       pending = { ...request } // unreadable checkpoint or manifest: compact without the estimate
+      lastCheckpoint = { path: request.checkpoint, savedAt: new Date().toISOString() }
     }
     return { result: queuedReport(pending.estimate) }
   }).catch(($, e, next) =>
@@ -168,9 +220,22 @@ export const register: Register = (on, options) => {
   let expecting: Pending | undefined
   let outcome: { skip?: string; tokensBefore?: number; tokensAfter?: number } | undefined
 
-  // Observe only: records whether the /compact this mod ran stood or was vetoed.
+  // Every compaction of the main conversation, automatic and precomputed ones
+  // included, carries the summary contract and the latest checkpoint's pointer.
+  // Then it records whether the /compact this mod ran stood or was vetoed.
   on('session.compact', async ($, e, next) => {
-    const result = await next(e)
+    let event = e
+    if (isContractOn && e.agentId === undefined) {
+      let profile: string | undefined
+      try {
+        profile = profilePath === undefined ? undefined : await $.fs.read(profilePath)
+      } catch {
+        profile = undefined // no profile: the default contract
+      }
+      const pointer = lastCheckpoint === undefined ? undefined : pointerLine(lastCheckpoint.path, lastCheckpoint.savedAt)
+      event = { ...e, instructions: withContract(e.instructions, contractFrom(profile), pointer) }
+    }
+    const result = await next(event)
     if (e.agentId === undefined && e.trigger !== 'precompute' && result.skip === undefined) isNudged = false
     if (expecting !== undefined && e.agentId === undefined && e.trigger !== 'precompute') {
       outcome = result.skip !== undefined ? { skip: result.skip } : { tokensBefore: result.tokensBefore, tokensAfter: result.tokensAfter }
@@ -193,7 +258,16 @@ export const register: Register = (on, options) => {
       if (suggestAt < 0 || isNudged || e.reason !== 'answer') return answered
       try {
         const { context } = await $.session.usage()
-        const threshold = suggestAt > 0 ? suggestAt : Math.round(context.window * 0.6)
+        // Where Claude Code will compact on its own, read once, when it starts to matter.
+        if (!hasAskedThreshold && context.tokens !== undefined && context.tokens >= 0.2 * context.window) {
+          hasAskedThreshold = true
+          try {
+            autoCompactAt = (await $.session.usage({ breakdown: 'summary' })).context.breakdown?.autoCompactThreshold
+          } catch {
+            autoCompactAt = undefined
+          }
+        }
+        const threshold = nudgeThreshold(suggestAt, context.window, autoCompactAt)
         if (context.tokens !== undefined && context.tokens >= threshold) {
           isNudged = true
           $.ui.log(

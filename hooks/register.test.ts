@@ -13,21 +13,23 @@ function turnEnd(reason: 'answer' | 'aborted' | 'refusal' | 'error', agentId?: s
 
 /** The engine beneath the plugin: records compactions and transcript lines. */
 const SUMMARY = [{ role: 'user', text: 'summary', toolUses: [] }]
+const FILES: Record<string, string> = {
+  [CKPT]: CHECKPOINT,
+  '/Users/x/proj/src/auth.ts': 'line one\nconst login = () => token\nreturn token\n',
+  '/Users/x/proj/docs/STATE.md': '# State\nAuth fix in progress.\n',
+  '/t/session.jsonl': [
+    JSON.stringify({ type: 'system', subtype: 'compact_boundary' }),
+    JSON.stringify({ type: 'attachment', attachment: { type: 'file', filename: '/Users/x/proj/docs/STATE.md' } }),
+  ].join('\n'),
+}
 
 function engine(
   on: On,
   compactAnswer: object = { messages: SUMMARY, tokensBefore: 412_000, tokensAfter: 31_000 },
   fileExists = true,
   usageTokens = 1_000,
-  files: Record<string, string> = {
-    [CKPT]: CHECKPOINT,
-    '/Users/x/proj/src/auth.ts': 'line one\nconst login = () => token\nreturn token\n',
-    '/Users/x/proj/docs/STATE.md': '# State\nAuth fix in progress.\n',
-    '/t/session.jsonl': [
-      JSON.stringify({ type: 'system', subtype: 'compact_boundary' }),
-      JSON.stringify({ type: 'attachment', attachment: { type: 'file', filename: '/Users/x/proj/docs/STATE.md' } }),
-    ].join('\n'),
-  },
+  files: Record<string, string> = FILES,
+  autoAt?: number,
 ) {
   const compactions: { instructions?: string }[] = []
   const commands: { command: string; args: string }[] = []
@@ -40,7 +42,10 @@ function engine(
     if (text === undefined) throw new Error(`ENOENT ${e.path}`)
     return { value: text }
   })
-  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: usageTokens, window: 1_000_000 }, rateLimits: [] } }) as never)
+  on('session.usage', (_, e) => {
+    const breakdown = (e as { breakdown?: string } | undefined)?.breakdown === undefined ? undefined : { autoCompactThreshold: autoAt }
+    return { value: { startedAt: 0, context: { tokens: usageTokens, window: 1_000_000, breakdown }, rateLimits: [] } } as never
+  })
   on('prompt.suggest', (_, e) => {
     suggestions.push(e.text)
     return { isShown: true }
@@ -226,3 +231,69 @@ describe('the save suggestion', () => {
     expect(suggestions).toEqual(['/smart-compact:save', '/smart-compact:save'])
   })
 })
+
+describe('long-horizon compactions', () => {
+  const PROFILE = '/Users/x/.claude/smart-compact/profile.md'
+  test('an automatic compaction carries the default contract', async ($, on) => {
+    const { compactions } = engine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.session.compact({ trigger: 'auto', messages: SUMMARY } as never)
+    expect(compactions[0]?.instructions?.startsWith('Long-horizon summary contract')).toBe(true)
+    expect(compactions[0]?.instructions).toContain('"go with recs"')
+  })
+  test("the profile's own contract replaces the default", async ($, on) => {
+    const { compactions } = engine(on, undefined, true, 1_000, { ...FILES, [PROFILE]: '# Profile\n## Summary contract\n- Keep the HANDOFF number.\n## Save\n- x\n' })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.session.compact({ trigger: 'auto', messages: SUMMARY } as never)
+    expect(compactions[0]?.instructions).toContain('- Keep the HANDOFF number.')
+    expect(compactions[0]?.instructions).not.toContain('"go with recs"')
+  })
+  test("after a save, the plugin's compaction and every later one keep the checkpoint", async ($, on) => {
+    const { compactions, clock, runQueued } = engine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.tool.call({ tool: TOOL_ID, instructions: INSTRUCTIONS, checkpoint: CKPT } as never)
+    await $.turn.complete(turnEnd('answer'))
+    await clock.advance(200)
+    await runQueued($ as never)
+    // The plugin's own /compact: its SAVE line first, the contract after, no second pointer.
+    expect(compactions[0]?.instructions?.startsWith(INSTRUCTIONS)).toBe(true)
+    expect(compactions[0]?.instructions).toContain('Long-horizon summary contract')
+    expect(compactions[0]?.instructions?.split('CHECKPOINT:').length).toBe(2)
+    // A later automatic compaction re-states the pointer, so the opt-in rehydrate survives it.
+    await $.session.compact({ trigger: 'auto', messages: SUMMARY } as never)
+    expect(compactions[1]?.instructions).toContain(`CHECKPOINT: ${CKPT} (saved 2026-11-03T12:00:00Z`)
+  })
+  test('a save that drops a standing rule is refused until it carries or retires it', async ($, on) => {
+    const PREV = '/Users/x/.claude/checkpoints/-Users-x-proj/prev.ckpt.md'
+    const front = (extra: string) => `---\ncreated: 2026-11-04T12:00:00Z\nproject_root: /Users/x/proj\nprevious: ${PREV}\nrebuild_budget: 150k\n---\n${extra}`
+    const files = {
+      ...FILES,
+      [PREV]: '## 1. Standing rules\n- Push means production: ask before any push (2026-10-20, always)\n- Claude tests its own work\n',
+      [CKPT]: front('## 1. Standing rules\n- Claude tests its own work\n'),
+    }
+    const { compactions, clock } = engine(on, undefined, true, 1_000, files)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    const refused = await $.tool.call({ tool: TOOL_ID, instructions: INSTRUCTIONS, checkpoint: CKPT } as never)
+    expect(String(refused.deny ?? refused.text)).toContain('"Push means production: ask before any push (2026-10-20, always)"')
+    files[CKPT] = front('## 1. Standing rules\n- Claude tests its own work\n- Push means production; ask Ryan before any push\n')
+    const queued = await $.tool.call({ tool: TOOL_ID, instructions: INSTRUCTIONS, checkpoint: CKPT } as never)
+    expect(queued.deny).toBe(undefined)
+    await $.turn.complete(turnEnd('aborted'))
+    await clock.advance(200)
+    expect(compactions.length).toBe(0)
+  })
+  test("the save suggestion fires at 60% of the session's own auto-compaction point", async ($, on) => {
+    const early = engine(on, undefined, true, 250_000, FILES, 400_000)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.turn.complete(turnEnd('answer'))
+    expect(early.suggestions).toEqual(['/smart-compact:save'])
+    expect(early.logs.join('\n')).toContain('context is at ≈250k tokens')
+  })
+  test('without a known auto-compaction point, 60% of the window: quiet at 250k', async ($, on) => {
+    const late = engine(on, undefined, true, 250_000)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.turn.complete(turnEnd('answer'))
+    expect(late.suggestions).toEqual([])
+  })
+})
+

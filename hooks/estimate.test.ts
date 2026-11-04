@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { estimateDetails, estimateLine, estimateOf, fmtK, parseCheckpoint, parseTokens, reattachedFromTranscript, readTarget, sliceLines, tokensOf } from './estimate'
+import { estimateDetails, estimateLine, estimateOf, fmtK, lastEntriesRange, measureTarget, parseCheckpoint, parseTokens, reattachedFromTranscript, readTarget, sectionRange, sliceLines, tokensOf } from './estimate'
 import type { Measured } from './estimate'
 import { CHECKPOINT } from './test-fixtures'
 
@@ -107,3 +107,36 @@ describe('estimating', () => {
     expect(reattachedFromTranscript('no boundary here')).toEqual([])
   })
 })
+
+describe('long-horizon targets', () => {
+  const STATE = ['# STATE', 'Updated: today', 'old history line', '## Where things stand', 'a', '### detail', 'b', '## Next action (one step)', 'Run the gate.', '## Open questions for Ryan', '1. q?'].join('\n')
+  const LOG = ['# Decisions', '## 2026-11-01 — one', 'x', '## 2026-11-02 — two', 'y', '## 2026-11-03 — three', 'z'].join('\n')
+  test('a #section or #last N target resolves against the project root', () => {
+    expect(readTarget('STATE.md#Next action', '/p', '/h')).toEqual({ path: '/p/STATE.md', start: undefined, end: undefined, section: 'Next action', lastN: undefined })
+    expect(readTarget('DECISIONS.md#last 3', '/p', '/h')).toEqual({ path: '/p/DECISIONS.md', start: undefined, end: undefined, section: undefined, lastN: 3 })
+    expect(readTarget('src/a.ts:5-9', '/p', '/h')?.start).toBe(5)
+  })
+  test('a section runs to the next heading of its level, subsections included', () => {
+    expect(sectionRange(STATE, 'Where things stand')).toEqual({ from: 3, to: 7 })
+    expect(sectionRange(STATE, 'next action')).toEqual({ from: 7, to: 9 })
+    expect(sectionRange(STATE, 'nowhere')).toBe(undefined)
+  })
+  test('the last N entries of an append-only log', () => {
+    expect(lastEntriesRange(LOG, 2)).toEqual({ from: 3, to: 7 })
+    expect(lastEntriesRange(LOG, 9)).toEqual({ from: 1, to: 7 })
+  })
+  test('measuring a section costs only its lines; a missing section is not found', () => {
+    const t = readTarget('STATE.md#Next action', '/p', undefined)!
+    expect(measureTarget(STATE, t)).toEqual({ chars: 'Next action (one step)'.length + 4 + 'Run the gate.'.length + 1, lines: 2, found: true })
+    expect(measureTarget(STATE, readTarget('STATE.md#Gone', '/p', undefined)!).found).toBe(false)
+  })
+  test('project_root and previous parse, and the manifest is found by title under any number', () => {
+    const md = ['---', 'cwd: /', 'project_root: /Users/x/proj', 'previous: /ck/prev.ckpt.md', 'rebuild_budget: 150k', '---', '## 7. Rehydration manifest', '| # | action | target | anchor | ~tokens | why |', '|---|---|---|---|---|---|', '| 1 | Read | STATE.md#Next action | — | 1k | next step |'].join('\n')
+    const m = parseCheckpoint(md)
+    expect(m.projectRoot).toBe('/Users/x/proj')
+    expect(m.previous).toBe('/ck/prev.ckpt.md')
+    expect(m.items[0]?.target).toBe('STATE.md#Next action')
+    expect(parseCheckpoint(md.replace('previous: /ck/prev.ckpt.md', 'previous: none')).previous).toBe(undefined)
+  })
+})
+
