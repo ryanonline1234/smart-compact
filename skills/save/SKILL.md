@@ -22,6 +22,7 @@ argument-hint: "[rebuild budget, e.g. 100k]"
 
 - None → save with the default 150k rebuild budget.
 - A budget like `100k` or `80000` → that rebuild budget.
+- `auto` → the plugin started this save on its own (`autoSave: boundary`): the last turn ended near the point where Claude Code compacts, or right after a commit, merge or deploy. Save without asking anything, since the user may be away; skip the step-0 confirmation. **If a user message arrives while you save, abandon the save:** don't call the queue tool, answer the message instead. Claude Code compacts on its own if it must, and every compaction carries the summary contract and the pending decision list. Keep the report to two lines.
 - Anything else → ask. A save run by mistake right after a compaction becomes the newest checkpoint and shadows the real one.
 
 ## Steps

@@ -58,11 +58,12 @@ export function pointerLine(checkpoint: string, savedAt: string): string {
   )
 }
 
-/** A compaction's instructions with the contract (and a checkpoint pointer) added. */
-export function withContract(instructions: string | undefined, contract: string, pointer?: string): string {
+/** A compaction's instructions with the contract, the pending ask and a checkpoint pointer added. */
+export function withContract(instructions: string | undefined, contract: string, pointer?: string, ask?: string): string {
   const head = instructions !== undefined && instructions.trim() !== '' ? [instructions.trim()] : []
   const keep = pointer !== undefined && !(instructions ?? '').includes('CHECKPOINT:') ? [pointer] : []
-  return [...head, `Long-horizon summary contract (smart-compact). Keep, verbatim where it says so:\n${contract}`, ...keep].join('\n\n')
+  const asked = ask !== undefined ? [ask] : []
+  return [...head, `Long-horizon summary contract (smart-compact). Keep, verbatim where it says so:\n${contract}`, ...asked, ...keep].join('\n\n')
 }
 
 /** Top-level list items of a section ("- x", "* x", "1. x"), each with its continuation lines. */
@@ -163,4 +164,128 @@ export function nudgeThreshold(suggestAt: number, window: number, autoCompactAt?
   if (suggestAt < 0) return Number.POSITIVE_INFINITY
   const ceiling = Math.round(0.6 * (autoCompactAt ?? window))
   return suggestAt > 0 ? Math.min(suggestAt, ceiling) : ceiling
+}
+
+// ---------------------------------------------------------------- pending asks
+
+/** A transcript row as the compaction event hands it (SessionMessage's fields this module reads). */
+export type Row = {
+  role: 'user' | 'assistant'
+  text: string
+  toolUses?: readonly { tool: string; input?: Record<string, unknown> }[]
+}
+export type PendingAsk = { list?: string; buttons?: string; answer?: string }
+
+const NUMBERED = /^\s*(?:\*\*)?\d{1,2}[.)]/
+const ASKS = /\?|\brec(?:s|ommend\w*)?\b/i
+const MAX_LIST = 2000
+
+/**
+ * The last numbered list in a message that asks something: items with a "?" or
+ * a recommendation. Items run to the next item; a blank line followed by
+ * unnumbered text ends the list.
+ */
+export function extractList(text: string): string | undefined {
+  const lines = text.split('\n')
+  const blocks: string[][] = []
+  let block: string[] | undefined
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? ''
+    if (NUMBERED.test(line)) {
+      if (block === undefined) blocks.push((block = []))
+      block.push(line)
+    } else if (block !== undefined) {
+      const next = lines.slice(i + 1).find(l => l.trim() !== '') ?? ''
+      if (line.trim() === '' && !NUMBERED.test(next)) block = undefined
+      else if (/^#{1,6}\s/.test(line)) block = undefined
+      else block.push(line)
+    }
+  }
+  const asking = blocks.filter(b => {
+    const items = b.filter(l => NUMBERED.test(l)).length
+    const body = b.join('\n')
+    return ASKS.test(body) && (items >= 2 || (/\?/.test(body) && /\brec/i.test(body)))
+  })
+  const last = asking[asking.length - 1]
+  if (last === undefined) return undefined
+  const out = last.join('\n').trim()
+  return out.length > MAX_LIST ? `${out.slice(0, MAX_LIST)}…` : out
+}
+
+/** A question put through a tool: the app's next-step box (wrap_up) or AskUserQuestion, with its options. */
+function toolAsk(uses: Row['toolUses']): string | undefined {
+  for (const u of [...(uses ?? [])].reverse()) {
+    const input = u.input ?? {}
+    if (/wrap_up$/.test(u.tool) && typeof input.ask === 'string') {
+      const labels = Array.isArray(input.actions) ? input.actions.map(a => (a as { label?: unknown }).label).filter(l => typeof l === 'string') : []
+      return `${input.ask}${labels.length > 0 ? ` Buttons: ${labels.map(l => `"${l}"`).join(', ')}.` : ''}`
+    }
+    if (/AskUserQuestion$/.test(u.tool) && Array.isArray(input.questions)) {
+      return input.questions
+        .map(q => {
+          const qq = q as { question?: unknown; options?: { label?: unknown }[] }
+          const opts = (qq.options ?? []).map(o => o.label).filter(l => typeof l === 'string')
+          return `${String(qq.question ?? '')}${opts.length > 0 ? ` Options: ${opts.map(l => `"${l}"`).join(', ')}.` : ''}`
+        })
+        .join(' ')
+    }
+  }
+  return undefined
+}
+
+/**
+ * The newest decision put to the user within the last `maxUserTurns` user
+ * messages: a numbered list that asks, and/or a question with buttons, plus the
+ * user's reply when there is one. A save-triggered compaction runs a turn after
+ * the list, so this looks back, not only at the last message.
+ */
+export function pendingAsk(rows: readonly Row[], maxUserTurns = 6): PendingAsk | undefined {
+  let users = 0
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i]
+    if (row === undefined) continue
+    if (row.role === 'user') {
+      if (row.text.trim() !== '' && (users += 1) > maxUserTurns) return undefined
+      continue
+    }
+    const list = row.text.trim() === '' ? undefined : extractList(row.text)
+    const buttons = toolAsk(row.toolUses)
+    if (list === undefined && buttons === undefined) continue
+    const reply = rows.slice(i + 1).find(r => r.role === 'user' && r.text.trim() !== '' && !r.text.startsWith('<'))
+    const answer = reply === undefined ? undefined : reply.text.trim().slice(0, 400)
+    return { list, buttons, answer }
+  }
+  return undefined
+}
+
+/** The compaction instruction that keeps a pending ask verbatim. */
+export function askInstruction(ask: PendingAsk): string {
+  const parts = ['The latest decision put to the user, which a reply like "go with recs" answers. The summary must quote it verbatim:']
+  if (ask.list !== undefined) parts.push(ask.list)
+  if (ask.buttons !== undefined) parts.push(`Asked with buttons: ${ask.buttons}`)
+  parts.push(ask.answer === undefined ? 'Not answered yet.' : `The user's reply, verbatim: "${ask.answer}"`)
+  return parts.join('\n')
+}
+
+// ---------------------------------------------------------------- automatic save
+
+export type AutoSaveMode = 'off' | 'suggest' | 'boundary'
+
+/** Bash commands that close an iteration: a commit, merge, push or tag, or a production deploy. */
+export const BOUNDARY_COMMAND = /\bgit\s+(?:-C\s+\S+\s+)?(?:commit|merge|push|tag)\b|\bvercel\b[^\n]*--prod\b|(?:^|[\s;&|])[\w./~-]*deploy\.sh\b|\b(?:npm|pnpm|yarn|bun)\s+run\s+deploy\b/i
+/** Files written at the end of a round: a numbered handoff, the state file, the decision log. */
+export const BOUNDARY_FILE = /(?:^|\/)(?:HANDOFF\/\d+[^/]*\.md|STATE\.md|DECISIONS\.md)$/
+
+/**
+ * Why to save now, at the end of a turn, or undefined. Measured 2026-11-04: 13
+ * of 17 automatic compactions fired on the user's next message, right after a
+ * turn ended just under the limit; 20 of 58 compactions came right after a
+ * commit, merge or deploy, the cheapest place to compact.
+ */
+export function autoSaveReason(tokens: number, autoCompactAt: number, isBoundary: boolean): 'near' | 'boundary' | undefined {
+  // The save turn itself costs about 12k tokens (measured 2026-11-04: 103k → 115k against a 117k point),
+  // so "near" always leaves it at least 25k of room, whatever the window.
+  if (tokens >= Math.min(0.85 * autoCompactAt, autoCompactAt - 25_000)) return 'near'
+  if (isBoundary && tokens >= 0.5 * autoCompactAt) return 'boundary'
+  return undefined
 }

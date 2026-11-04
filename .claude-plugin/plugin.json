@@ -1,6 +1,6 @@
 {
   "name": "smart-compact",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Checkpoint a Claude Code session before compacting, compact it automatically, and rehydrate on your terms with a measured estimate of what comes back.",
   "author": {
     "name": "Ryan Tseng",
@@ -29,6 +29,17 @@
       "title": "Summary contract on every compaction",
       "description": "Add the summary contract (standing rules, open decisions, counters, and the latest checkpoint's pointer) to every compaction, automatic ones included. The contract comes from the 'Summary contract' section of ~/.claude/smart-compact/profile.md when present.",
       "default": true
+    },
+    "autoSave": {
+      "type": "string",
+      "title": "Automatic save",
+      "description": "suggest: only suggest /smart-compact:save (default). boundary: at the end of a turn, save on your own when context is at 85% of the auto-compaction point (your next message would overflow it) or at 50% right after a commit, merge, deploy or state-file write. off: neither.",
+      "options": [
+        "suggest",
+        "boundary",
+        "off"
+      ],
+      "default": "suggest"
     }
   }
 }

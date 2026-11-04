@@ -21,3 +21,15 @@ Ordered; execute top-down, stop at rebuild_budget.
 | 4 | Search | episodic-memory: "auth", this session | — | ~800 | conversation detail |
 | 5 | Read | src/gone.ts | — | 3k | deleted since |
 `
+
+// A message that ends with numbered decisions and recommendations, for the pending-ask tests.
+export const ASKING = [
+  'Two things before I build:',
+  '',
+  '1. **Deploy main now?** Rec: yes.',
+  '2. Use the supplier API or scrape the price pages?',
+  '   Options: API, scrape. Rec: API.',
+  '3. Add a cost ceiling per build? Rec: yes, 150 dollars.',
+  '',
+  'Say "go with recs" and I start.',
+].join('\n')

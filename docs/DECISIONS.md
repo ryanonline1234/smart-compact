@@ -26,3 +26,11 @@ Append-only. Each entry: the decision, then why.
 - **Standing rules and open decisions first, and they override the task state.** A rehydrate on 2026-10-30 restored a rule in the directives section while the task state still contradicted it, and the stale line won.
 - **Profile as a file, not options.** The contract and the per-user save/rehydrate habits are prose; a markdown file at `~/.claude/smart-compact/profile.md` (override `SMART_COMPACT_PROFILE`) holds them, re-read at every compaction.
 - **The suggestion caps at 60% of the auto-compaction point.** Automatic compactions fired from 204k to 970k depending on the model's window, so a fixed token number alone fires too late on small windows.
+
+## 2026-11-04 (adaptive: proposal items 1 and 2)
+
+- **Capture the pending list mechanically, from the compaction event's own messages.** The contract alone already kept 3 of 3 question lines verbatim in the forced tests, so capture shows no gain there; it is a guarantee for what the test does not stress: a list several turns back in a 900k session, questions asked with buttons (the app's next-step box, AskUserQuestion), and the user's reply quoted with it. It looks back up to six user messages because a save-triggered compaction runs a turn after the list.
+- **Automatic save at the turn boundary, opt-in (`autoSave: boundary`).** 13 of 17 automatic compactions fired on the user's next message; the turn before had ended just under the limit. Saving at that turn's end costs a model turn but no waiting, since the user is reading. Started with `$.command.run('smart-compact:save', 'auto')` from a timer, like `/compact`. Once per stretch; a compaction or the user's own message (origin composer, sdk or bridge) re-arms it.
+- **"Near" is min(85% of the auto point, the point minus 25k).** The save turn cost about 12k tokens in the forced run (103k → 115k against a 117k point); a fixed share leaves too little on small windows.
+- **The auto-compaction point is read at the first turn's end and every 10th turn,** not once past 20% of the model window. Bug found end to end: a 150k session on a 1M model never asked, and fell back to 85% of 1M.
+- **The `auto` save abandons itself if the user writes during it.** Otherwise the save turn would absorb a reply like "go with recs" and the session would then idle on a compaction.

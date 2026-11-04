@@ -7,9 +7,12 @@
   saves  Two saves in one session started at "/", as the desktop app runs:
          project-root keying, carry-forward of rules and open decisions, an
          approval with a condition, and section targets in the manifest.
+  boundary  autoSave "boundary" with the window forced to 100k: the plugin
+         should save on its own at a turn's end before the overflow, and the
+         compaction summary should quote the pending list's lines verbatim.
 
 Usage:
-    python3 scripts/e2e_long.py [--scenario auto|saves|both] [--model claude-sonnet-5-5] [--claude PATH]
+    python3 scripts/e2e_long.py [--scenario auto|saves|boundary|all] [--model claude-sonnet-5-5] [--claude PATH]
 Costs a few dollars and takes about ten minutes for both. Uses this repo as the
 plugin (--plugin-dir) and hides other plugin folders (CLAUDE_CODE_PLUGIN_DIRS).
 """
@@ -72,6 +75,11 @@ def tool_results(rows: list[dict], name_part: str) -> list[tuple[bool, str]]:
     return found
 
 
+def verbatim_lines(lines: list[str], hay: str) -> int:
+    """How many of the asked lines appear in the summary character for character (ends trimmed)."""
+    return sum(1 for l in lines if l.strip() and l.strip() in hay)
+
+
 def words_hit(needle: str, hay: str, k: int = 6) -> bool:
     """True when the first k content words of needle all appear in hay."""
     ws = [w for w in re.findall(r"[a-z0-9']+", needle.lower()) if len(w) > 3][:k]
@@ -122,6 +130,7 @@ def run_auto_arm(claude: str, model: str, contract: bool, root: Path) -> dict:
         "questions_kept": sum(words_hit(q, summary) for q in questions),
         "questions_asked": len(questions),
         "recs_kept": sum(1 for q in questions if "Rec:" in q and words_hit(q.split("Rec:", 1)[1], summary, 4)),
+        "questions_verbatim": verbatim_lines(questions, summary),
         "summary_chars": len(summary),
         "log": str(log),
     }
@@ -220,9 +229,77 @@ def run_saves(claude: str, model: str, root: Path) -> dict:
     return result
 
 
+# ---------------------------------------------------------------- boundary
+
+def run_boundary(claude: str, model: str, root: Path) -> dict:
+    proj = root / "boundary"
+    proj.mkdir()
+    para = "The refresh window should be computed from the server clock, not the client clock, because mobile clients drift by minutes. "
+    for i in range(1, 8):
+        (proj / f"notes-{i}.md").write_text("\n".join(f"Note {i}.{j}: {para * 3}" for j in range(90)))
+    # 150k, not 100k: a session with many plugins starts near 70k, and a 100k window compacts near 70k.
+    env = {**BASE_ENV, "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "150000"}
+    extra = ["--plugin-dir", str(REPO), "--permission-mode", "bypassPermissions",
+             "--settings", json.dumps({"pluginConfigs": {"smart-compact@inline": {"options": {"autoSave": "boundary"}}}})]
+    log = OUT / f"boundary-{time.strftime('%Y%m%dT%H%M%S')}.jsonl"
+    s = Session(claude, proj, model, log, extra, env)
+    s.turn("Two standing rules for this project, from now on: you test your own work and never ask me to test; never push or deploy without my explicit OK. Reply only with: noted.")
+    s.turn("Before we start, ask me exactly three numbered questions about how to organise the notes in this folder, each followed by your recommendation, in the form 'N. <question>? Rec: <recommendation>.' Do not read any files yet.")
+    is_auto_save = lambda e: e.get("type") == "system" and e.get("subtype") == "ui_log" and "Saving now (autoSave)" in e.get("text", "")
+    started = None
+    for i in range(1, 8):
+        s.send(f"Read notes-{i}.md in full with the Read tool, then reply only with: read {i}.")
+        def hit(e):
+            return e.get("type") == "result" or is_auto_save(e)
+        first = s.wait(hit, 300)
+        if first is not None and is_auto_save(first):
+            started = first
+            break
+        # The notice lands at the turn's end, around the result: give it a moment before the next message.
+        late = s.wait(is_auto_save, 5)
+        if late is not None:
+            started = late
+            break
+        if any(is_auto_save(r) for r in read_log(log)):
+            started = next(r for r in read_log(log) if is_auto_save(r))
+            break
+        if any(r.get("subtype") == "compact_boundary" for r in read_log(log)):
+            break
+    # The automatic save runs as its own turn, then compacts: wait for the plugin's compaction notice.
+    done = s.wait(lambda e: e.get("type") == "system" and e.get("subtype") == "ui_log" and "compacted" in e.get("text", ""), 420) if started else None
+    s.wait(lambda e: e.get("type") == "result", 30)
+    s.close()
+    rows = read_log(log)
+    summary = summary_text(rows)
+    asked = next((t for t in assistant_texts(rows) if re.search(r"^\s*1\.", t, re.M) and "Rec" in t), "")
+    questions = [l.strip() for l in asked.splitlines() if re.match(r"^\s*\d\.", l)]
+    boundaries = [r.get("compact_metadata", {}).get("trigger") for r in rows if r.get("subtype") == "compact_boundary"]
+    queued = tool_results(rows, "compact_after_turn")
+    slug_dirs = [d for d in (Path.home() / ".claude" / "checkpoints").glob(f"*{re.sub(r'[^A-Za-z0-9]', '-', root.name + '/boundary')}") if d.is_dir()]
+    checkpoints = [f.name for d in slug_dirs for f in d.glob("*.ckpt.md")]
+    for d in slug_dirs:
+        for f in list(d.glob("*.ckpt.md")) + list((d / "archive").glob("*.ckpt.md")):
+            f.unlink()
+        for sub in (d / "archive", d):
+            if sub.is_dir() and not any(sub.iterdir()):
+                sub.rmdir()
+    return {
+        "auto_save_started": bool(started),
+        "auto_save_notice": (started or {}).get("text", "")[:170],
+        "compaction_triggers": boundaries,
+        "queue_calls": [("refused" if err else "queued") + ": " + text[:90] for err, text in queued],
+        "checkpoints_written": checkpoints,
+        "compacted_notice": (done or {}).get("text", "").splitlines()[0][:120] if done else "",
+        "questions_asked": len(questions),
+        "questions_verbatim_in_summary": verbatim_lines(questions, summary),
+        "summary_chars": len(summary),
+        "log": str(log),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--scenario", choices=["auto", "saves", "both"], default="both")
+    parser.add_argument("--scenario", choices=["auto", "saves", "boundary", "both", "all"], default="all")
     parser.add_argument("--model", default="claude-sonnet-5-5")
     parser.add_argument("--claude")
     args = parser.parse_args()
@@ -230,9 +307,11 @@ def main() -> None:
     claude = find_claude(args.claude)
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        if args.scenario in ("saves", "both"):
+        if args.scenario in ("saves", "both", "all"):
             print(json.dumps({"saves": run_saves(claude, args.model, root)}, indent=1), flush=True)
-        if args.scenario in ("auto", "both"):
+        if args.scenario in ("boundary", "all"):
+            print(json.dumps({"boundary": run_boundary(claude, args.model, root)}, indent=1), flush=True)
+        if args.scenario in ("auto", "both", "all"):
             for contract in (True, False):
                 print(json.dumps({"auto": run_auto_arm(claude, args.model, contract, root)}, indent=1), flush=True)
 

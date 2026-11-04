@@ -52,6 +52,13 @@ Built for sessions that run for days: many rounds of feedback, several compactio
 - **A carry-forward guard.** Each checkpoint names the one before it. The save tool refuses a checkpoint that drops a standing rule or an open decision the previous one held, until each is carried, or written as `retired:`, `answered:` or `promoted to <file>:`.
 - **Section targets.** A manifest can name `STATE.md#Next action` or `DECISIONS.md#last 3` instead of whole files, which grow large and are rewritten every round.
 
+### Adapting to the moment
+
+Measured on the same sessions: 13 of 17 compactions Claude Code started on its own fired on the user's next message, right after a turn had ended just under the limit, and 20 of 58 compactions came right after a commit, merge or deploy. So the plugin reads the situation:
+
+- **The pending decision list, captured mechanically.** At every compaction it finds the newest numbered list that asks something (a `?` or a recommendation), or a question asked with buttons, within the last six user messages. It quotes the list verbatim into the compaction instructions, with the user's reply if there is one, so "go with recs" never depends on the summarizer noticing the list.
+- **An automatic save at the turn boundary** (option `autoSave: boundary`; the default `suggest` only suggests). When a turn ends near the point where Claude Code would compact on its own, the plugin starts `/smart-compact:save auto` right away, while you read. "Near" means 85% of that point, or the point minus 25k when that is lower, so the save itself has room. It also saves at 50% right after a commit, merge, deploy or state-file write. The save never asks anything; if you send a message while it runs, it stops and answers you. In a forced 150k-window run, the save started at 79% of the point, wrote the checkpoint, and compacted at 103k, before the engine would have at 117k; the summary kept all three open questions verbatim.
+
 ### Profile
 
 `~/.claude/smart-compact/profile.md` (or the file `SMART_COMPACT_PROFILE` names) tailors all of this. Its **Summary contract** section replaces the built-in contract on every compaction; its **Save** and **Rehydrate** sections add to those commands. Edits apply from the next compaction.
@@ -101,16 +108,16 @@ In a full end-to-end run, the notice estimated ≈14.3k for rehydrate. The two f
 
 It is a mod: code that runs inside Claude Code with your permissions. `claude plugin validate` lists exactly what it touches:
 
-- **Hooks:** `session.start` (registers its tool), `tool.call` (its own tool only), `session.compact` (adds the summary contract and observes the outcome), `classic.SessionStart` and `classic.UserPromptSubmit` (to learn the transcript's path), `turn.complete`.
-- **Calls:** reads files listed in your checkpoint, the previous checkpoint, the profile and the session transcript; reads `HOME` and `SMART_COMPACT_PROFILE`; runs `/compact`; writes transcript notices and a prompt suggestion. No network, no file writes, no processes. Turn the contract off with the `summaryContract` option.
+- **Hooks:** `session.start` (registers its tool), `tool.call` (its own tool; Bash, Write and Edit observed only), `prompt.submit` (your message re-arms the automatic save), `session.compact` (adds the summary contract and the pending list, and observes the outcome), `classic.SessionStart` and `classic.UserPromptSubmit` (to learn the transcript's path), `turn.complete`.
+- **Calls:** reads files listed in your checkpoint, the previous checkpoint, the profile and the session transcript; reads `HOME` and `SMART_COMPACT_PROFILE`; runs `/compact`, and `/smart-compact:save auto` when `autoSave` is `boundary`; watches the main loop's Bash, Write and Edit calls for commits, merges, deploys and state-file writes; writes transcript notices and a prompt suggestion. No network, no file writes, no processes. Turn the contract off with the `summaryContract` option.
 
 ## Develop
 
 ```bash
 claude plugin validate .                 # manifest, hooks, calls
-claude plugin test .                     # 47 unit tests
+claude plugin test .                     # 62 unit tests
 python3 scripts/e2e.py                   # full save → compact → rehydrate run, about two minutes
-python3 scripts/e2e_long.py              # two saves with carry-forward, and an automatic compaction with the contract on and off
+python3 scripts/e2e_long.py              # two saves with carry-forward, an automatic save at the boundary, and an automatic compaction with the contract on and off
 python3 scripts/calibrate.py FILE...     # measure chars per token on your own files
 ```
 

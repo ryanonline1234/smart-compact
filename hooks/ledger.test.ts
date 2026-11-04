@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { blocks, carryForwardGaps, contractFrom, DEFAULT_CONTRACT, isCarried, isSettled, listItems, nudgeThreshold, pointerLine, sectionText, withContract } from './ledger'
+import { askInstruction, autoSaveReason, blocks, BOUNDARY_COMMAND, BOUNDARY_FILE, carryForwardGaps, contractFrom, DEFAULT_CONTRACT, extractList, isCarried, isSettled, listItems, nudgeThreshold, pendingAsk, pointerLine, sectionText, withContract } from './ledger'
+import { ASKING } from './test-fixtures'
 
 const PREVIOUS = `---
 created: 2026-11-04T10:00:00Z
@@ -100,3 +101,55 @@ describe('when to suggest saving', () => {
     expect(nudgeThreshold(-1, 1_000_000)).toBe(Number.POSITIVE_INFINITY)
   })
 })
+
+const LIST_ONLY = ASKING.split('\n').slice(2, 6).join('\n')
+const row = (role: 'user' | 'assistant', text: string, toolUses: { tool: string; input?: Record<string, unknown> }[] = []) => ({ role, text, toolUses })
+
+describe('pending asks', () => {
+  test('the last numbered list that asks, continuation lines kept, the closing line left out', () => {
+    expect(extractList(ASKING)).toBe(LIST_ONLY)
+  })
+  test('numbered steps that ask nothing are not a pending ask', () => {
+    expect(extractList('Done:\n1. Ran the tests\n2. Merged into main')).toBe(undefined)
+  })
+  test('of two lists, the one that asks', () => {
+    expect(extractList('Done:\n1. built\n2. merged\n\nNext:\n1. Deploy? Rec: yes\n2. Push? Rec: no')).toBe('1. Deploy? Rec: yes\n2. Push? Rec: no')
+  })
+  test('a save-triggered compaction finds the list a turn back, with the reply', () => {
+    const rows = [row('user', 'start'), row('assistant', ASKING), row('user', 'go with recs, but no deploy yet'), row('assistant', 'Checkpoint saved. Compaction is queued.')]
+    expect(pendingAsk(rows)).toEqual({ list: LIST_ONLY, buttons: undefined, answer: 'go with recs, but no deploy yet' })
+  })
+  test("buttons from the app's next-step box", () => {
+    const rows = [row('assistant', 'Built and tested.', [{ tool: 'mcp__ccd_turn__wrap_up', input: { recap: 'x', ask: 'Merge it?', actions: [{ label: 'Yes, merge' }, { label: 'Not yet' }] } }])]
+    expect(pendingAsk(rows)?.buttons).toBe('Merge it? Buttons: "Yes, merge", "Not yet".')
+  })
+  test('nothing older than six user messages counts', () => {
+    const rows = [row('assistant', ASKING), ...Array.from({ length: 7 }, (_, i) => row('user', `message ${i}`))]
+    expect(pendingAsk(rows)).toBe(undefined)
+  })
+  test('the instruction quotes the list and says whether it was answered', () => {
+    const open = askInstruction({ list: LIST_ONLY })
+    expect(open).toContain(LIST_ONLY)
+    expect(open.endsWith('Not answered yet.')).toBe(true)
+    expect(askInstruction({ list: LIST_ONLY, answer: 'go with recs' })).toContain('The user\'s reply, verbatim: "go with recs"')
+  })
+})
+
+describe('the automatic-save trigger', () => {
+  test('85% of the auto-compaction point, or 50% right after a boundary', () => {
+    expect(autoSaveReason(850_000, 1_000_000, false)).toBe('near')
+    expect(autoSaveReason(849_000, 1_000_000, false)).toBe(undefined)
+    expect(autoSaveReason(500_000, 1_000_000, true)).toBe('boundary')
+    expect(autoSaveReason(499_000, 1_000_000, true)).toBe(undefined)
+    // A small window keeps 25k of room for the save turn: 117k point → near from 92k.
+    expect(autoSaveReason(92_000, 117_000, false)).toBe('near')
+    expect(autoSaveReason(91_000, 117_000, false)).toBe(undefined)
+  })
+  test('commands and files that close a round', () => {
+    for (const c of ['git commit -m "x"', 'git -C ~/b merge feat', 'cd site && vercel deploy --prod --yes', 'scripts/deploy.sh --prod', 'npm run deploy']) expect(BOUNDARY_COMMAND.test(c)).toBe(true)
+    for (const c of ['git status', 'git log --oneline', 'echo redeploying', 'vercel ls']) expect(BOUNDARY_COMMAND.test(c)).toBe(false)
+    for (const f of ['/p/HANDOFF/84_COST_CHECK.md', '/p/STATE.md', '/p/docs/DECISIONS.md']) expect(BOUNDARY_FILE.test(f)).toBe(true)
+    for (const f of ['/p/src/state.ts', '/p/HANDOFF/README.md']) expect(BOUNDARY_FILE.test(f)).toBe(false)
+  })
+})
+
