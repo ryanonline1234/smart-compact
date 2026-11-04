@@ -10,6 +10,8 @@
 
 **Activation (checked 2026-11-04):** fresh sessions on 2.1.310 (CLI) and 2.1.309 (desktop app) load 0.3.0 from this folder as `smart-compact@inline`, with both commands and the queue tool. Sessions opened before the 10:06 switch run the old version until reopened; the author's restarted session picked up 0.3.
 
-**Next:** watch the automatic save in real sessions (does it fire at the right moments, does it ever absorb a reply). Later: decide whether to push to the public repo; then update the site (it describes 0.1) and redeploy with `cd site && vercel deploy --prod --yes` after deleting any `.env.local`.
+**First real automatic save (2026-11-04 23:35Z, a Buildable session with a 1M window):** it started 4 s after a turn ended, at about 0.9M tokens, wrote a correct checkpoint (the carry-forward guard refused once; the save settled the item and queued), and absorbed no reply. **Bug, double compaction:** a `/smart-compact:save` the author typed during it ran as soon as it ended, found nothing new, reused the checkpoint and queued a second `/compact`. Both ran: 907,832 tokens to a summary (53 s), then 40,294 tokens to a summary of that summary (47 s). Cause: `compact_after_turn` (hooks/register.ts:170) queues even while an earlier `/compact` is queued and not yet run (`expecting` set), and the second run overwrites `expecting`.
+
+**Next:** on the author's OK, fix the double compaction (the tool answers "already queued" while a compaction is pending or queued; regression test; an e2e scenario with a manual save typed during an automatic one), then watch one more automatic save. Later: decide whether to push to the public repo; then update the site (it describes 0.1) and redeploy with `cd site && vercel deploy --prod --yes` after deleting any `.env.local`.
 
 **Ideas, not started:** measure CJK; measure Fable 5.1's tokenizer; `claude plugin eval` graders for the skill's behavior; rehydrate tiers (core vs full) if the contract proves not enough.
