@@ -2,6 +2,8 @@
 
 Checkpoint a Claude Code session before it compacts, compact it automatically, and rehydrate on your terms, with a measured estimate of what rehydrating brings back.
 
+**Site:** [smart-compact.vercel.app](https://smart-compact.vercel.app)
+
 `/compact` replaces your conversation with one summary, and that summary decides what survives. smart-compact saves a curated checkpoint to disk first: your directives, decisions, dead ends, exact strings that must survive verbatim, and a manifest of what to re-read. Then it compacts for you. After compaction it tells you exactly what `/smart-compact:rehydrate` would put back and what that costs, so rebuilding is a choice instead of a guess.
 
 ```
@@ -23,7 +25,7 @@ Send /smart-compact:rehydrate to rebuild context from it, or keep working from t
 
 ## Install
 
-Requires Claude Code 2.1.309 or later with mods (function hooks) enabled, which is the default from 2.1.287. Tested on 2.1.309 in the desktop app and 2.1.310 in the CLI.
+Requires Claude Code 2.1.309 or later with mods (function hooks) enabled, which is the default from 2.1.287. Tested end to end on 2.1.310 in stream-json mode, the mode the desktop app runs sessions in; the same hooks, before packaging, ran in the desktop app on 2.1.309.
 
 ```bash
 claude plugin marketplace add ryanonline1234/smart-compact
@@ -43,7 +45,7 @@ Checkpoints are plain markdown in `~/.claude/checkpoints/<project-slug>/`. The n
 
 ## The save suggestion
 
-When context passes a size you choose, the plugin suggests `/smart-compact:save` once: a transcript line, plus a Tab suggestion in the terminal. It never saves on its own. The default threshold is 60% of the model's context window. To change it, set `suggestAt` in tokens (`-1` turns it off):
+When context passes a size you choose, the plugin suggests `/smart-compact:save` once: a transcript line, plus a Tab suggestion in the terminal. It never saves on its own. The default threshold is 60% of the model's context window. To change it, set `suggestAt` in tokens (`-1` turns it off) in `/config`, with `/plugin configure smart-compact@smart-compact`, or in settings:
 
 ```json
 {

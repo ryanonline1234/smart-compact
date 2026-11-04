@@ -11,3 +11,8 @@ Append-only. Each entry: the decision, then why.
 - **Find re-attached files in the transcript.** Compaction writes `file` and `compact_file_reference` attachment rows without raising `session.append`, and they are absent from `session.compact`'s result. The transcript path comes from any classic hook event's `transcript_path`.
 - **Report the engine's before/after counts, labelled; no live window total.** `post_tokens` leaves out the system prompt and tool definitions. `/context`'s local estimate read right after compaction gave 43k in one run and 91k in the next, against about 76k real.
 - **Suggest saving at a threshold; never auto-save.** A save needs a model turn. Auto-submitting one would interrupt work, and in an unattended session it would stall at the opt-in rehydrate.
+
+## 2026-11-04
+
+- **Host the site on Vercel with no Git link, deployed from `site/` by CLI.** A Git-connected project would deploy the repo root on every push. The project was created with `vercel project add` first, because the CLI silently connects Git when it creates a project non-interactively. `site/.vercelignore` keeps `.env*` and `.vercel/` out of uploads; the CLI's `vercel link` writes a `.env.local` holding a Vercel OIDC token.
+- **Commits use the GitHub no-reply address.** The repo is public, and a personal address in commit metadata would be published with it.
