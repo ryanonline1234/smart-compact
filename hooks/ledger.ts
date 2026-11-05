@@ -285,3 +285,61 @@ export function askInstruction(ask: PendingAsk): string {
   parts.push(ask.answer === undefined ? 'Not answered yet.' : `The user's reply, verbatim: "${ask.answer}"`)
   return parts.join('\n')
 }
+
+// ---------------------------------------------------------------- the save suggestion in a band
+
+/** Bash commands that close an iteration: a commit, merge, push or tag, or a production deploy. */
+export const BOUNDARY_COMMAND = /\bgit\s+(?:-C\s+\S+\s+)?(?:commit|merge|push|tag)\b|\bvercel\b[^\n]*--prod\b|(?:^|[\s;&|])[\w./~-]*deploy\.sh\b|\b(?:npm|pnpm|yarn|bun)\s+run\s+deploy\b/i
+/** Files written at the end of a round: a numbered handoff, the state file, the decision log. */
+export const BOUNDARY_FILE = /(?:^|\/)(?:HANDOFF\/\d+[^/]*\.md|STATE\.md|DECISIONS\.md)$/
+
+/** Since the user's last message, did the main loop commit, merge, deploy or write a round-closing file? */
+export function boundarySince(rows: readonly Row[]): boolean {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]
+    if (r === undefined) continue
+    if (r.role === 'user' && r.text.trim() !== '' && !r.text.trimStart().startsWith('<')) return false
+    for (const u of r.toolUses ?? []) {
+      const command = u.input?.command
+      const file = u.input?.file_path
+      if (u.tool === 'Bash' && typeof command === 'string' && BOUNDARY_COMMAND.test(command)) return true
+      if (/^(?:Edit|MultiEdit|Write)$/.test(u.tool) && typeof file === 'string' && BOUNDARY_FILE.test(file)) return true
+    }
+  }
+  return false
+}
+
+/**
+ * The band the user picked (`suggestFrom`–`suggestTo`), kept below where Claude
+ * Code compacts on its own: at most 90% of that point, so a small window still
+ * gets its suggestion in time.
+ */
+export function suggestBand(from: number, to: number, autoCompactAt: number | undefined, window: number): { from: number; to: number } {
+  const top = Math.min(to, Math.round(0.9 * (autoCompactAt ?? 0.85 * window)))
+  return { from: Math.min(from, top), to: top }
+}
+
+/**
+ * When, inside the band, to suggest saving: at the first turn end after a round
+ * closed (a commit, merge, deploy or state-file write: the cheapest place to
+ * compact, measured 2026-11-04 as 20 of 58 compactions), else at the band's top.
+ * So the point varies with each session's work.
+ */
+export function suggestReason(tokens: number, band: { from: number; to: number }, isBoundary: boolean): 'boundary' | 'top' | undefined {
+  if (tokens >= band.to) return 'top'
+  if (tokens >= band.from && isBoundary) return 'boundary'
+  return undefined
+}
+
+/** What the model reads with the user's next message, so its reply offers the save (desktop hosts show no prompt suggestion). */
+export function suggestionNote(tokens: number, reason: 'boundary' | 'top' | 'point', band?: { from: number; to: number }, isAutoRehydrate = false): string {
+  const k = (n: number) => `${Math.round(n / 1000)}k`
+  const where = band === undefined ? '' : `, inside the ${k(band.from)}–${k(band.to)} range where the user wants to be offered a save`
+  const why = reason === 'boundary' ? ', and a round just closed (a commit, merge, deploy or state-file write), so saving is cheap now' : ''
+  const after = isAutoRehydrate ? 'rehydrating runs on its own afterwards' : 'rehydrating stays their choice'
+  return (
+    `[smart-compact plugin, not the user] This conversation is at ≈${k(tokens)} tokens${where}${why}. ` +
+    `After you answer the user's message, add one short line suggesting /smart-compact:save: it checkpoints this session and compacts it, and ${after}. ` +
+    'Suggest it once, and do not run it yourself.'
+  )
+}

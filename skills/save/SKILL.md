@@ -14,7 +14,7 @@ argument-hint: "[rebuild budget, e.g. 100k]"
 3. /smart-compact:rehydrate   REHYDRATE — the user's choice: read checkpoint + manifest → curated rebuild
 ```
 
-**Rehydration is opt-in.** After a compaction, never rehydrate on your own, even when the summary carries a `CHECKPOINT:` line. The user decides, by sending `/smart-compact:rehydrate`. If their next message is other work, do it from the summary and mention once, in one line, that `/smart-compact:rehydrate` would rebuild from the checkpoint, quoting the summary's "Rehydrate estimate at save" sentence when it has one.
+**Rehydration is opt-in.** After a compaction, never rehydrate on your own, even when the summary carries a `CHECKPOINT:` line. (When the user has turned on `autoRehydrate`, the plugin runs `/smart-compact:rehydrate auto` itself after the compaction; don't run it yourself either way.) The user decides, by sending `/smart-compact:rehydrate`. If their next message is other work, do it from the summary and mention once, in one line, that `/smart-compact:rehydrate` would rebuild from the checkpoint, quoting the summary's "Rehydrate estimate at save" sentence when it has one.
 
 **Every compaction carries a summary contract**, automatic ones included: the plugin adds instructions to keep standing rules, open numbered decisions with their recommendations, approvals with conditions, unfinished requests, iteration pointers and working methods. A save is still the high-fidelity path; the contract is the floor.
 

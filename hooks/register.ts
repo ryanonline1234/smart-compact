@@ -3,7 +3,7 @@ import { autoName, carryDropped, CHECKPOINT_NAME, composeCheckpoint, droppedItem
 import type { AutoInput, DiskFacts } from './autockpt'
 import { estimateDetails, estimateLine, estimateOf, fmtK, isRead, measureTarget, parseCheckpoint, reattachedFromTranscript, readTarget, tokensOf } from './estimate'
 import type { Estimate, Manifest, Measured } from './estimate'
-import { askInstruction, carryForwardGaps, contractFrom, nudgeThreshold, pendingAsk, pointerLine, PROFILE_PATH, sectionText, unquotedAnswers, withContract } from './ledger'
+import { askInstruction, boundarySince, carryForwardGaps, contractFrom, nudgeThreshold, pendingAsk, pointerLine, PROFILE_PATH, sectionText, suggestBand, suggestionNote, suggestReason, unquotedAnswers, withContract } from './ledger'
 import type { Row } from './ledger'
 
 // smart-compact's hooks module. /smart-compact:save writes a checkpoint, then
@@ -11,7 +11,10 @@ import type { Row } from './ledger'
 // tool measures the checkpoint's rehydration manifest and queues: the
 // compaction runs when that turn ends, by running /compact as if the person
 // typed it. Rehydrating stays the person's choice (/smart-compact:rehydrate).
-// Separately, once context passes `suggestAt`, it suggests /smart-compact:save.
+// Separately, it suggests /smart-compact:save: once past `suggestAt`, or inside the
+// `suggestFrom`–`suggestTo` band at the first turn end after a round closed (else at
+// the band's top). The model offers it in its next reply. With `autoRehydrate`, the
+// plugin runs /smart-compact:rehydrate itself after a compaction.
 // Long-horizon additions (0.2): every compaction, automatic ones included,
 // carries a summary contract (standing rules, open decisions, counters) and the
 // latest checkpoint's pointer; a save that drops a rule or an open decision the
@@ -357,7 +360,7 @@ async function writeAuto($: Dollar, input: AutoInput, rows: readonly Row[], home
 }
 
 /** The notice once the checkpoint for a compaction the plugin did not start is on disk. */
-async function announceAuto($: Dollar, run: AutoRun, o: AutoOutcome, sized: string, env: Env): Promise<void> {
+async function announceAuto($: Dollar, run: AutoRun, o: AutoOutcome, sized: string, env: Env, isAutoRehydrate = false): Promise<void> {
   const { home, transcriptPath } = env
   const manifest = parseCheckpoint(o.text)
   const measured = await measureItems($, manifest, home)
@@ -376,10 +379,10 @@ async function announceAuto($: Dollar, run: AutoRun, o: AutoOutcome, sized: stri
     [
       `smart-compact: Claude Code compacted this conversation${sized}; a checkpoint for it was ${who}: ${run.input.path}`,
       ...estimateDetails(after),
-      'Send /smart-compact:rehydrate to rebuild context from it, or keep working from the summary.',
+      isAutoRehydrate ? 'Rehydrating from it now (autoRehydrate).' : 'Send /smart-compact:rehydrate to rebuild context from it, or keep working from the summary.',
     ].join('\n'),
   )
-  $.prompt.suggest({ text: '/smart-compact:rehydrate' }).catch(() => undefined)
+  if (!isAutoRehydrate) $.prompt.suggest({ text: '/smart-compact:rehydrate' }).catch(() => undefined)
 }
 
 export const register: Register = (on, options) => {
@@ -397,7 +400,15 @@ export const register: Register = (on, options) => {
   // Suggest /smart-compact:save once context passes `suggestAt` tokens (0: 60% of
   // the window; -1: never), once per stretch between compactions.
   const suggestAt = typeof options.suggestAt === 'number' ? options.suggestAt : 0
+  // A band replaces the single point when both ends are set: the point then varies with each session's work.
+  const suggestFrom = typeof options.suggestFrom === 'number' ? options.suggestFrom : 0
+  const suggestTo = typeof options.suggestTo === 'number' ? options.suggestTo : 0
+  const isBand = suggestFrom > 0 && suggestTo >= suggestFrom
   let isNudged = false
+  /** The suggestion the model reads with the user's next message, once. */
+  let note: string | undefined
+  // autoRehydrate: "off" (default), "after-save" (after the plugin's own compaction), "always" (after Claude Code's too).
+  const autoRehydrate = options.autoRehydrate === 'after-save' || options.autoRehydrate === 'always' ? options.autoRehydrate : 'off'
   let autoCompactAt: number | undefined
   /** Turns since the auto-compaction point was last read; it is read at the first turn's end and every 10th after. */
   let turnsSinceThreshold = -1
@@ -568,6 +579,7 @@ export const register: Register = (on, options) => {
     const result = await next(event)
     if (isMain && e.trigger !== 'precompute' && result.skip === undefined) {
       isNudged = false
+      note = undefined
       compactions += 1
       if (!isOurs && pending !== undefined) {
         // Claude Code compacted while a save's turn ran: the save's checkpoint stands, and its /compact must not follow.
@@ -585,7 +597,12 @@ export const register: Register = (on, options) => {
             const extra = since === undefined ? undefined : gapAppendix(rows, since)
             const final = extra === undefined ? o : { ...o, text: `${o.text.trimEnd()}\n${extra}` }
             if (extra !== undefined) await $.fs.write(run.input.path, final.text)
-            await announceAuto($, run, final, sized, { home, transcriptPath })
+            await announceAuto($, run, final, sized, { home, transcriptPath }, autoRehydrate === 'always')
+            if (autoRehydrate === 'always') {
+              $.clock.after(COMPACT_DELAY_MS, () => {
+                $.command.run({ command: 'smart-compact:rehydrate', args: 'auto' }).catch((err: unknown) => $.ui.log(`smart-compact: the automatic rehydrate did not start (${errorText(err)}). /smart-compact:rehydrate does it by hand.`))
+              })
+            }
           })
           .catch((err: unknown) => $.ui.log(`smart-compact: the checkpoint for this compaction failed (${errorText(err)}); the plugin's own version is at ${run.input.path}.`))
       }
@@ -601,7 +618,17 @@ export const register: Register = (on, options) => {
     if (typeof path === 'string' && path !== '') transcriptPath = path
   }
   on('classic.SessionStart', ($, e, next) => (notePath(e.transcript_path), next(e))).catch(($, e, next) => next(e))
-  on('classic.UserPromptSubmit', ($, e, next) => (notePath(e.transcript_path), next(e))).catch(($, e, next) => next(e))
+  // The suggestion reaches the model with the user's next message, so its reply offers the save
+  // (an SDK host such as the desktop app shows no prompt suggestion). Not with a smart-compact command.
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    notePath(e.transcript_path)
+    const result = await next(e)
+    if (note === undefined) return result
+    const extra = note
+    note = undefined
+    if (/^\s*\/smart-compact:/.test(String((e as { prompt?: unknown }).prompt ?? ''))) return result
+    return { ...result, additionalContext: [...(result?.additionalContext ?? []), extra] }
+  }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
     const answered = await next(e)
@@ -630,13 +657,37 @@ export const register: Register = (on, options) => {
             // keep the last reading
           }
         }
-        if (suggestAt < 0 || isNudged) return answered
-        const threshold = nudgeThreshold(suggestAt, context.window, autoCompactAt)
-        if (context.tokens !== undefined && context.tokens >= threshold) {
+        if (isNudged || context.tokens === undefined) return answered
+        const after = autoRehydrate === 'off' ? 'rehydrating stays your choice' : 'rehydrating runs on its own afterwards'
+        if (isBand) {
+          const band = suggestBand(suggestFrom, suggestTo, autoCompactAt, context.window)
+          if (context.tokens < band.from) return answered
+          let isBoundary = false
+          try {
+            isBoundary = boundarySince((await $.session.messages()) as unknown as readonly Row[])
+          } catch {
+            isBoundary = false // no transcript to read: wait for the band's top
+          }
+          const reason = suggestReason(context.tokens, band, isBoundary)
+          if (reason === undefined) return answered
           isNudged = true
+          note = suggestionNote(context.tokens, reason, band, autoRehydrate !== 'off')
+          $.ui.log(
+            `smart-compact: context is at ≈${fmtK(context.tokens)} tokens, inside your ${fmtK(band.from)}–${fmtK(band.to)} band` +
+              (reason === 'boundary' ? ', right after a round closed' : '') +
+              `. /smart-compact:save checkpoints this session and compacts it; ${after}. Claude will offer it in its next reply.`,
+          )
+          $.prompt.suggest({ text: '/smart-compact:save' }).catch(() => undefined)
+          return answered
+        }
+        if (suggestAt < 0) return answered
+        const threshold = nudgeThreshold(suggestAt, context.window, autoCompactAt)
+        if (context.tokens >= threshold) {
+          isNudged = true
+          note = suggestionNote(context.tokens, 'point', undefined, autoRehydrate !== 'off')
           $.ui.log(
             `smart-compact: context is at ≈${fmtK(context.tokens)} tokens (${Math.round((100 * context.tokens) / context.window)}% of the window). ` +
-              '/smart-compact:save checkpoints this session and compacts it; rehydrating stays your choice.',
+              `/smart-compact:save checkpoints this session and compacts it; ${after}.`,
           )
           $.prompt.suggest({ text: '/smart-compact:save' }).catch(() => undefined)
         }
@@ -699,11 +750,20 @@ export const register: Register = (on, options) => {
               [
                 `${head} Checkpoint: ${used.checkpoint}`,
                 ...details,
-                'Send /smart-compact:rehydrate to rebuild context from it, or keep working from the summary.',
+                autoRehydrate === 'off' ? 'Send /smart-compact:rehydrate to rebuild context from it, or keep working from the summary.' : 'Rehydrating from it now (autoRehydrate).',
               ].join('\n'),
             )
-            // Terminal only: a dim suggestion, Tab to take. Headless and SDK hosts (the desktop app) show none.
-            $.prompt.suggest({ text: '/smart-compact:rehydrate' }).catch(() => undefined)
+            if (autoRehydrate === 'off') {
+              // Terminal only: a dim suggestion, Tab to take. Headless and SDK hosts (the desktop app) show none.
+              $.prompt.suggest({ text: '/smart-compact:rehydrate' }).catch(() => undefined)
+            } else {
+              // The user turned rehydrating on for every save: run it as they would, once the session is idle.
+              $.clock.after(COMPACT_DELAY_MS, () => {
+                $.command.run({ command: 'smart-compact:rehydrate', args: 'auto' }).catch((err: unknown) =>
+                  $.ui.log(`smart-compact: the automatic rehydrate did not start (${errorText(err)}). /smart-compact:rehydrate does it by hand.`),
+                )
+              })
+            }
           }
         },
         (err: unknown) => {

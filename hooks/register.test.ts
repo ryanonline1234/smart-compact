@@ -54,6 +54,7 @@ function engine(
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('classic.SessionStart', () => ({}) as never)
+  on('classic.UserPromptSubmit', () => ({}) as never)
   on('tool.register', () => ({ value: { tool: TOOL_ID } }))
   on('fs.exists', () => ({ value: fileExists }))
   on('turn.complete', (_, e) => ({ text: e.answer }))
@@ -654,3 +655,81 @@ ${answer}
     expect(said).not.toContain('other.ts') // only read
   })
 })
+
+describe('settings: the band, delivered by the model, and autoRehydrate', () => {
+  const BAND = { suggestFrom: 600_000, suggestTo: 700_000 }
+  const committed = [
+    { role: 'user', text: 'commit it', toolUses: [] },
+    { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'x', tool: 'Bash', input: { command: 'git commit -m "HANDOFF/97"' } }] },
+  ]
+  test("inside the band, right after a commit, the model reads the suggestion with the user's next message, once", { options: BAND }, async ($, on) => {
+    const { logs, clock } = engine(on, undefined, true, 640_000, FILES, 967_000)
+    on('session.messages', () => ({ value: committed }) as never)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.turn.complete(turnEnd('answer'))
+    await clock.advance(200)
+    expect(logs.join('\n')).toContain('inside your 600k–700k band, right after a round closed')
+    const next = await $.classic.UserPromptSubmit({ prompt: 'go with recs', transcript_path: '/t/session.jsonl' } as never)
+    expect(JSON.stringify(next)).toContain('≈640k tokens, inside the 600k–700k range')
+    expect(JSON.stringify(next)).toContain('/smart-compact:save')
+    const after = await $.classic.UserPromptSubmit({ prompt: 'and then?', transcript_path: '/t/session.jsonl' } as never)
+    expect(JSON.stringify(after ?? {})).not.toContain('smart-compact')
+  })
+  test('inside the band without a commit it waits for the top; past the top it suggests', { options: BAND }, async ($, on) => {
+    const quiet = engine(on, undefined, true, 640_000, FILES, 967_000)
+    on('session.messages', () => ({ value: [{ role: 'user', text: 'keep going', toolUses: [] }] }) as never)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.turn.complete(turnEnd('answer'))
+    expect(quiet.logs.join('\n')).not.toContain('band')
+  })
+  test('at the top of the band it suggests, commit or not', { options: BAND }, async ($, on) => {
+    const { logs } = engine(on, undefined, true, 705_000, FILES, 967_000)
+    on('session.messages', () => ({ value: [{ role: 'user', text: 'keep going', toolUses: [] }] }) as never)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.turn.complete(turnEnd('answer'))
+    expect(logs.join('\n')).toContain('inside your 600k–700k band.')
+  })
+  test('a small window pulls the band below its own compaction point', { options: BAND }, async ($, on) => {
+    const { logs } = engine(on, undefined, true, 151_000, FILES, 167_000)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.turn.complete(turnEnd('answer'))
+    expect(logs.join('\n')).toContain('inside your 150k–150k band')
+  })
+  test('not delivered with a smart-compact command: the user is already saving', { options: BAND }, async ($, on) => {
+    engine(on, undefined, true, 705_000, FILES, 967_000)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.turn.complete(turnEnd('answer'))
+    const saving = await $.classic.UserPromptSubmit({ prompt: '/smart-compact:save', transcript_path: '/t/session.jsonl' } as never)
+    expect(JSON.stringify(saving ?? {})).not.toContain('additionalContext')
+  })
+  test('autoRehydrate after-save: the plugin runs /smart-compact:rehydrate once its compaction finishes', { options: { autoRehydrate: 'after-save' } }, async ($, on) => {
+    const { commands, logs, clock, runQueued } = engine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.tool.call({ tool: TOOL_ID, instructions: INSTRUCTIONS, checkpoint: CKPT } as never)
+    await $.turn.complete(turnEnd('answer'))
+    await runQueued($ as never)
+    await clock.advance(200)
+    expect(commands).toEqual([{ command: 'smart-compact:rehydrate', args: 'auto' }])
+    expect(logs.join('\n')).toContain('Rehydrating from it now (autoRehydrate).')
+  })
+  test('autoRehydrate always: after Claude Code compacts on its own too, once the checkpoint is written', { options: { autoRehydrate: 'always' } }, async ($, on) => {
+    const { commands, clock } = forkEngine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.session.compact({ trigger: 'auto', messages: ROWS } as never)
+    await clock.settle()
+    await clock.advance(200)
+    expect(commands.filter(c => c.command === 'smart-compact:rehydrate')).toEqual([{ command: 'smart-compact:rehydrate', args: 'auto' }])
+  })
+  test('off (the default): no automatic rehydrate', async ($, on) => {
+    const { commands, clock, runQueued } = forkEngine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.session.compact({ trigger: 'auto', messages: ROWS } as never)
+    await $.tool.call({ tool: TOOL_ID, instructions: INSTRUCTIONS, checkpoint: CKPT } as never)
+    await $.turn.complete(turnEnd('answer'))
+    await runQueued($ as never)
+    await clock.settle()
+    await clock.advance(200)
+    expect(commands.filter(c => c.command === 'smart-compact:rehydrate')).toEqual([])
+  })
+})
+

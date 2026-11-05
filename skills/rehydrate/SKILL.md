@@ -7,11 +7,12 @@ disable-model-invocation: true
 
 # smart-compact: rehydrate
 
-Reads the checkpoint `/smart-compact:save` wrote and executes its rehydration manifest, up to the rebuild budget. The user chose to run this; never start it on your own. If `~/.claude/smart-compact/profile.md` exists, read it first: its **Rehydrate** section adds to these steps.
+Reads the checkpoint `/smart-compact:save` wrote and executes its rehydration manifest, up to the rebuild budget. The user chose to run this; never start it on your own (the plugin's `auto` run is the user's standing choice, made with the `autoRehydrate` option). If `~/.claude/smart-compact/profile.md` exists, read it first: its **Rehydrate** section adds to these steps.
 
 ## Arguments
 
 - A path to a `.ckpt.md` file → rehydrate from that file.
+- `auto` → the plugin started this on its own, because the user turned on `autoRehydrate`. Ask nothing. If a step-2 guard fires, or the checkpoint is found only via step 1's (3), report that in two lines and stop without spending the budget. Finish with the report and start no work, even when the checkpoint names a next action: the user's next message decides.
 - A budget like `100k` → overrides the checkpoint's `rebuild_budget`.
 - Both may be given, in either order.
 

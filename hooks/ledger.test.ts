@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { askInstruction, blocks, carryForwardGaps, unquotedAnswers, contractFrom, DEFAULT_CONTRACT, extractList, isCarried, isSettled, listItems, nudgeThreshold, pendingAsk, pointerLine, sectionText, withContract } from './ledger'
+import { askInstruction, blocks, boundarySince, carryForwardGaps, suggestBand, suggestionNote, suggestReason, unquotedAnswers, contractFrom, DEFAULT_CONTRACT, extractList, isCarried, isSettled, listItems, nudgeThreshold, pendingAsk, pointerLine, sectionText, withContract } from './ledger'
 import { ASKING } from './test-fixtures'
 
 const PREVIOUS = `---
@@ -151,3 +151,35 @@ describe('pending asks', () => {
     expect(askInstruction({ list: LIST_ONLY, answer: 'go with recs' })).toContain('The user\'s reply, verbatim: "go with recs"')
   })
 })
+
+describe('the save suggestion in a band', () => {
+  const bash = (command: string) => ({ role: 'assistant' as const, text: '', toolUses: [{ tool: 'Bash', input: { command } }] })
+  const user = (text: string) => ({ role: 'user' as const, text, toolUses: [] })
+  test('a round closed since the user last spoke: a commit, merge, deploy, or a state-file write', () => {
+    expect(boundarySince([user('build it'), bash('git commit -m "x"')])).toBe(true)
+    expect(boundarySince([user('build it'), { role: 'assistant', text: '', toolUses: [{ tool: 'Write', input: { file_path: '/p/HANDOFF/97_BATTERY.md' } }] }])).toBe(true)
+    expect(boundarySince([bash('git commit -m "x"'), user('next one')])).toBe(false) // before the user's message
+    expect(boundarySince([user('build it'), bash('git status')])).toBe(false)
+  })
+  test('the band stays below where Claude Code compacts on its own', () => {
+    expect(suggestBand(600_000, 700_000, 967_000, 1_000_000)).toEqual({ from: 600_000, to: 700_000 })
+    expect(suggestBand(600_000, 700_000, 167_000, 200_000)).toEqual({ from: 150_300, to: 150_300 })
+    expect(suggestBand(600_000, 700_000, undefined, 1_000_000)).toEqual({ from: 600_000, to: 700_000 })
+  })
+  test('inside the band: right after a round closes, else at the top', () => {
+    const band = { from: 600_000, to: 700_000 }
+    expect(suggestReason(590_000, band, true)).toBe(undefined)
+    expect(suggestReason(640_000, band, true)).toBe('boundary')
+    expect(suggestReason(640_000, band, false)).toBe(undefined)
+    expect(suggestReason(700_000, band, false)).toBe('top')
+  })
+  test('the note asks the model to offer the save once, and not run it', () => {
+    const n = suggestionNote(640_000, 'boundary', { from: 600_000, to: 700_000 }, true)
+    expect(n).toContain('≈640k tokens, inside the 600k–700k range')
+    expect(n).toContain('a round just closed')
+    expect(n).toContain('/smart-compact:save')
+    expect(n).toContain('rehydrating runs on its own afterwards')
+    expect(n).toContain('do not run it yourself')
+  })
+})
+

@@ -1,6 +1,6 @@
 {
   "name": "smart-compact",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Checkpoint a Claude Code session before compacting, compact it automatically, and rehydrate on your terms with a measured estimate of what comes back.",
   "author": {
     "name": "Ryan Tseng",
@@ -20,9 +20,23 @@
     "suggestAt": {
       "type": "number",
       "title": "Suggest saving at (tokens)",
-      "description": "Context size, in tokens, at which smart-compact suggests /smart-compact:save once. It never fires later than 60% of the point where Claude Code compacts on its own. 0 means that 60% point; -1 turns the suggestion off.",
+      "description": "Context size, in tokens, at which Claude offers /smart-compact:save once, in its next reply. It never fires later than 60% of the point where Claude Code compacts on its own. 0 means that 60% point; -1 turns the suggestion off. Ignored when suggestFrom and suggestTo are set.",
       "default": 0,
       "min": -1
+    },
+    "suggestFrom": {
+      "type": "number",
+      "title": "Suggest saving from (tokens)",
+      "description": "With suggestTo, a band instead of a single point: inside it, Claude offers /smart-compact:save at the first turn end after a commit, merge, deploy or state-file write, else at the band's top, so the point varies with each session's work. Kept below where Claude Code compacts on its own. 0: no band.",
+      "default": 0,
+      "min": 0
+    },
+    "suggestTo": {
+      "type": "number",
+      "title": "Suggest saving by (tokens)",
+      "description": "The band's top: the latest point Claude offers /smart-compact:save. 0: no band.",
+      "default": 0,
+      "min": 0
     },
     "summaryContract": {
       "type": "boolean",
@@ -35,6 +49,17 @@
       "title": "Checkpoint at Claude Code's own compactions",
       "description": "When Claude Code compacts on its own (at its threshold, precomputed in the background, or a bare /compact), write a checkpoint for it: a fork of this session writes it with the save skill's rules, alongside the summary. Costs one cached request per compaction. Off: only /smart-compact:save writes checkpoints.",
       "default": true
+    },
+    "autoRehydrate": {
+      "type": "string",
+      "title": "Rehydrate automatically",
+      "description": "off: you send /smart-compact:rehydrate when you want it (default). after-save: the plugin runs it as soon as a /smart-compact:save compaction finishes. always: also after Claude Code's own compactions, once their checkpoint is written (that one lands after the turn in progress).",
+      "options": [
+        "off",
+        "after-save",
+        "always"
+      ],
+      "default": "off"
     }
   }
 }
