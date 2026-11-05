@@ -176,7 +176,7 @@ What smart-compact adds is the final step. The fork's checkpoint is checked agai
 
 Keeping the stock summary also avoids the `{ messages }` replacement bugs listed above, which gives it an engineering advantage over handoff-compact's design. This is an inference from the issue reports, not a tested comparison. The fork's cache savings depend on keeping tool definitions in the prompt prefix, because changing them invalidates the entire cache ([Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)). `$.model.fork` keeps them by design.
 
-The author reports that fork-written checkpoints matched manual saves on all rubric lines in 3 of 3 A/B pairs. That is the author's own evidence and is discussed in the claims section below.
+The author reports that fork-written checkpoints on 0.5.1 matched or beat manual saves on all rubric lines in 5 of 5 A/B pairs, and that a blind judge scored them 106 against 100 of 125. That is the author's own evidence and is discussed in the claims section below.
 
 **Verdict: partly new.** A fork writing beside the summary at engine compactions exists (high confidence). Validating and correcting the fork's checkpoint appears new (medium confidence: the competing mods were searched for checking logic, not read in full).
 
@@ -275,7 +275,12 @@ What is new is an absolute figure on the 5.5 generation, on Read-tool output, wi
 The author's evidence points the same way as the literature, but it is thin. All three of the following are the author's own unreplicated measurements:
 
 - **Forced automatic-compaction A/B.** With the contract, all three open questions kept their recommendations verbatim in 3 of 3 runs; without it, in none of 3 runs. (Re-graded from the logs on 2026-11-05; the README had said one run per arm. Each arm mixed two runs of 0.2 and one of 0.3.) The run is the unit of replication, so a two-sided Fisher exact test on 3 against 0 runs gives p = 0.10.
-- **Fork versus manual comparison.** Fork-written checkpoints matched 0.4.0's manual saves on all rubric lines in 3 of 3 pairs. Against 0.5.0's improved manual save they matched in 2 of 3, and a blind judge scored the fork 60 of 75 against 65. Manual saves are themselves written by the model, and the author defined the rubric, so this measures consistency rather than correctness.
+- **Fork versus manual comparison.**
+  - **0.4.0:** fork-written checkpoints matched manual saves on all rubric lines in 3 of 3 pairs.
+  - **0.5.0:** they matched the improved manual save in only 2 of 3, and a blind judge scored the fork 60 of 75 against 65.
+  - **0.5.1, after a retune:** they matched or beat it on every line in 5 of 5 pairs, with criteria fixed before the run.
+  - **The judge on 0.5.1:** a clean headless judge scored each checkpoint against its own session, tool calls included, and gave the fork 106 of 125 against 100. The fork scored higher in 3 pairs and lower in 2.
+  - **What the two measures show:** manual saves are themselves written by the model, and the author defined the rubric, so the rubric lines measure consistency rather than correctness. The judge is the correctness evidence, at one judgment per checkpoint, and both arms ran with the author's settings hooks active.
 - **229-session analysis.** The context lost after compactions was standing rules and pending decision lists. This is one user's history.
 
 The findings are consistent with independent work:

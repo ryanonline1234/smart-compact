@@ -66,10 +66,13 @@ Built for sessions that run for days: many rounds of feedback, several compactio
   - **How it's written:** a fork of the session writes it, alongside the summary: the same model reading the same transcript, with tools denied (Claude Code's `$.model.fork`). Its answer goes only to the file.
   - **What the fork gets:** the save skill's rules, the template, your profile, the previous checkpoint, the pending decision, and the facts a save would look up with tools (git state, the state files' next action and open questions).
   - **How it's checked:** like a manual save, with corrections asked for up to twice, then any dropped item carried verbatim and marked.
-  - **Measured:**
-    - Against 0.4.0's manual save, it matched on every rubric line in 3 of 3 A/B pairs.
-    - Against 0.5.0's improved manual save, it matched in 2 of 3 pairs. A blind judge scored the fork 60 of 75 and the manual save 65.
-    - Tuning is under way.
+  - **Measured on 0.5.1** (5 A/B pairs on Opus 5.5, a 150k forced window, criteria fixed before the run):
+    - It matched or beat the manual save on every rubric line in 5 of 5 pairs. The rubric is the author's own, so this measures consistency with a manual save.
+    - A blind judge scored each checkpoint against its own session, tool calls included, in a clean headless session. It gave the fork 106 of 125 and the manual save 100. Per pair, the fork scored higher in 3 and lower in 2. That is one judgment per checkpoint.
+    - **History:**
+      - On 0.4.0, the fork matched in 3 of 3 pairs.
+      - On 0.5.0, it trailed the improved manual save in 2 of 3 pairs, with the judge at 60 against 65 of 75.
+      - The 0.5.1 retune closed that gap.
 
   Option `checkpointOnCompact` (default on).
 - **Section targets.** A manifest can name `STATE.md#Next action` or `DECISIONS.md#last 3` instead of whole files, which grow large and are rewritten every round.
