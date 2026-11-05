@@ -1,27 +1,29 @@
 # State
 
-**Version:** 0.4.0 on local branch `long-horizon`, **committed locally, not pushed**. It builds on 0.2 "long-horizon", pending-list capture, one compaction at a time (0.3.1) and the automatic save's retirement (0.3.2), and adds checkpoints at Claude Code's own compactions (`docs/02-autocompact-checkpoints.md`). Public `main` (github.com/ryanonline1234/smart-compact, site smart-compact.vercel.app) is still 0.1.0.
+**Version:** 0.5.0 on local branch `long-horizon`, **committed locally, not pushed**. 0.4.0 (checkpoints at Claude Code's own compactions) plus the manual-save fixes from the blind judge's findings and the settings Ryan asked for: a save band the model offers, and `autoRehydrate`. Public `main` (github.com/ryanonline1234/smart-compact, site smart-compact.vercel.app) is still 0.1.0.
 
-**Installed for the author:** loaded from this working copy via `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`, options under `pluginConfigs["smart-compact@inline"]`: `suggestAt: 400000`; `checkpointOnCompact` unset, so on by default. Backups: `settings.json.pre-smart-compact-0.2.bak`, `settings.json.pre-autosave.bak`, `settings.json.pre-retire-autosave.bak`. Profile: `~/.claude/smart-compact/profile.md`. Branch `fork-checkpoints` holds the build history; worktree `~/smart-compact-fork` removed after the merge.
+**Installed for the author:** loaded from this working copy via `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`. Options under `pluginConfigs["smart-compact@inline"]`: `suggestFrom: 600000`, `suggestTo: 700000`, `autoRehydrate: "always"`; `checkpointOnCompact` on by default. Backups: `settings.json.pre-smart-compact-0.2.bak`, `.pre-autosave.bak`, `.pre-retire-autosave.bak`, `.pre-0.5-settings.bak`. Profile: `~/.claude/smart-compact/profile.md`. A/B results live in `~/smart-compact-runs/` (outside any worktree).
 
 **How it behaves now:**
-- **`/smart-compact:save`** writes a checkpoint and compacts, as before; a suggestion comes once past 400k.
-- **Every compaction it did not start** (Claude Code's own, precomputed ones, a bare `/compact`) gets a checkpoint written by a fork of the session. The fork works alongside the summary and is checked like a save. A plugin-written checkpoint stands in when no fork can run.
-- **An engine compaction cancels a save's own `/compact`,** or vetoes it if it was already handed over.
-- **Every compaction** carries the summary contract and the pending decision list verbatim.
+- **Inside 600k–700k**, Claude offers `/smart-compact:save` in its next reply, at the first turn end after a commit, merge, deploy or state-file write, or at 700k at the latest. The band stays below 90% of the session's own compaction point.
+- **`/smart-compact:save`** writes a checkpoint and compacts. The queue tool refuses an `answered:` line that doesn't quote the user, and names files changed this session (Edit/Write, or uncommitted in git) that the manifest leaves out.
+- **After every compaction** with a checkpoint, the plugin runs `/smart-compact:rehydrate auto` (autoRehydrate always). It asks nothing and starts no work.
+- **Every compaction the plugin did not start** gets a checkpoint written by a fork of the session. Every compaction carries the summary contract and the pending list.
 
-**Verified (2026-11-04, 0.4.0):**
-- **Checks:** 83 unit tests pass, `claude plugin validate` passes, the type check is clean, and a fresh session loads 0.4.0 with both commands and the queue tool.
-- **The spike:** `$.model.fork` works in an SDK-mode session, and inside an `auto` compaction at no added time.
-- **The A/B gate, `--scenario ab`:** 3 pairs on Opus 5.5 with a 150k forced window.
-  - The fork matched the manual save on all 9 rubric lines in 3 of 3 pairs, so it passed.
-  - The first gate run failed 2 of 3. The cause was a matcher bug, shared by the grader and the plugin's carry check, and fixed with a test that fails on the old code.
-- **The blind judge:** each checkpoint scored against its own session, tool calls included. The fork was at least as high as the manual save on rules, decisions, task state, next action and manifest in all three pairs; summed, fork minus manual is +3, +1, 0, +4, +2. One sample per checkpoint, and the judge's input took four versions to get right (DECISIONS.md).
+**Verified (2026-11-05, 0.5.0):**
+- **Checks:** 102 unit tests pass, `claude plugin validate` passes, the type check is clean, and a fresh session loads 0.5.0.
+- **E2E `--scenario settings`:** after a commit inside a test band, the model answered "What is 2 + 2?" with the answer plus an offer of `/smart-compact:save`. A save then compacted once and rehydrated on its own.
+- **Manual save, before (0.4.0) vs after (0.5.0)**, 3 runs each with the fixed harness:
+  - next action includes the approved work: 0/3 → 3/3;
+  - manifest covers files changed this session: 0/3 → 2/3;
+  - answered lines quote the user: 3/3 → 3/3;
+  - the 9 other rubric lines: full in both;
+  - blind judge: 64 → 65 of 75;
+  - save turn: 11.9k → 12.7k tokens on average.
+- **The fork arm on 0.5.0:** the gate passed 2 of 3 pairs. It failed on "next action includes approved work" in one pair, a line the improved manual save now passes. Blind judge: 60 of 75 for the fork, against 65 for the manual save (67 for the fork in the 0.4.0 gate). The fork's repeated errors were calling the user "he/his" (3/3) and calling an in-flight read not done.
 
-**Real session, 2026-11-04 03:20Z, Buildable (manual save):** `/smart-compact:save` at 640k tokens. The carry-forward guard refused once (3 open decisions from the previous checkpoint unsettled); the save recorded them as answered and queued. One compaction, 640k → 42k in 75 s, no double. The rehydrate was clean and re-read about 3.5k tokens. Ryan's next "Go with recs" resolved to the checkpoint's HANDOFF/96 §4 list. The fork path did not run: a save's own compaction never forks.
+**Not verified end to end:** a fork-written checkpoint in a real session; the precompute path; `autoRehydrate always` after an engine compaction (unit tests only).
 
-**Not verified end to end:** a fork-written checkpoint in a real session (it needs Claude Code to compact on its own, or a bare `/compact`); the precompute path (unit tests only; `-p` did not precompute); the fork's cost on a 1M-token session.
+**Next:** watch the first 600k–700k offer and the automatic rehydrates in a real session. Proposed: tune the fork (name the user or say "they"; a call made with its reply still pending is in flight, not "not done"; finish it, then the first unfinished plan item), then re-run `--scenario ab` until the fork matches the manual save again. Later: decide whether to push to the public repo and update the site (it describes 0.1).
 
-**Next:** watch the first engine compaction in a real session, ideally a precomputed one in Buildable. Compare its `…-auto.ckpt.md` with that session's last manual checkpoint, and note the time and cost of the fork. Then decide whether to push to the public repo and update the site, which describes 0.1. To redeploy the site: `cd site && vercel deploy --prod --yes`, after deleting any `.env.local`.
-
-**Ideas, not started:** measure CJK; measure Fable 5.1's tokenizer; `claude plugin eval` graders for the skill's behavior; tell the fork that, after an in-flight request, open questions to the user come before work that depends on them (one judged pair found the fork planning to build before the answers).
+**Ideas, not started:** measure CJK; measure Fable 5.1's tokenizer; `claude plugin eval` graders for the skill's behavior.
