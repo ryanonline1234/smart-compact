@@ -50,7 +50,7 @@ Checkpoints are plain markdown in `~/.claude/checkpoints/<project-slug>/`, keyed
 
 ## What it keeps, and how
 
-Built for sessions that run for days: many rounds of feedback, several compactions, decisions answered with a short "go with recs". The author measured 229 of their own interactive sessions with 35 compactions. The context lost afterwards was standing rules and pending asks, and 5 of the 7 losses followed compactions Claude Code started on its own. That is one person's sessions, not a general result.
+Built for sessions that run for days: many rounds of feedback, several compactions, decisions answered with a short "go with recs". Over 229 of the author's interactive sessions, agents reading the transcripts judged what was lost after compactions: standing rules and pending asks, in 7 of 35 compactions, 5 of them automatic. A scripted re-measurement ([`docs/05-session-study.md`](docs/05-session-study.md)) reproduces the population and finds that 78% of "go with recs" replies answer a numbered list. A keyword proxy can't reproduce the loss judgments, so that figure stays agent-judged. It is one person's sessions, not a general result.
 
 - **The summary contract.** The plugin adds instructions to every compaction of the main conversation:
   - keep standing rules, with their date and scope;
@@ -186,6 +186,7 @@ python3 scripts/e2e.py                   # full save → compact → rehydrate r
 python3 scripts/e2e_long.py              # two saves with carry-forward, one compaction per queue, and an automatic compaction with the contract on and off
 python3 scripts/e2e_long.py --scenario ab --model claude-opus-5-5   # the quality gate: compaction checkpoints vs manual saves, 3 pairs and a blind judge
 python3 scripts/calibrate.py FILE...     # measure chars per token on your own files
+python3 scripts/sessions_study.py        # what compaction does to your own long sessions (aggregates only)
 ```
 
 Load the working copy into a session with `claude --plugin-dir .`.
