@@ -18,7 +18,9 @@
   - The first gate run failed 2 of 3. The cause was a matcher bug, shared by the grader and the plugin's carry check, and fixed with a test that fails on the old code.
 - **The blind judge:** each checkpoint scored against its own session, tool calls included. The fork was at least as high as the manual save on rules, decisions, task state, next action and manifest in all three pairs; summed, fork minus manual is +3, +1, 0, +4, +2. One sample per checkpoint, and the judge's input took four versions to get right (DECISIONS.md).
 
-**Not verified end to end:** the precompute path (unit tests only; `-p` did not precompute); the fork's cost on a 1M-token session.
+**Real session, 2026-11-04 03:20Z, Buildable (manual save):** `/smart-compact:save` at 640k tokens. The carry-forward guard refused once (3 open decisions from the previous checkpoint unsettled); the save recorded them as answered and queued. One compaction, 640k → 42k in 75 s, no double. The rehydrate was clean and re-read about 3.5k tokens. Ryan's next "Go with recs" resolved to the checkpoint's HANDOFF/96 §4 list. The fork path did not run: a save's own compaction never forks.
+
+**Not verified end to end:** a fork-written checkpoint in a real session (it needs Claude Code to compact on its own, or a bare `/compact`); the precompute path (unit tests only; `-p` did not precompute); the fork's cost on a 1M-token session.
 
 **Next:** watch the first engine compaction in a real session, ideally a precomputed one in Buildable. Compare its `…-auto.ckpt.md` with that session's last manual checkpoint, and note the time and cost of the fork. Then decide whether to push to the public repo and update the site, which describes 0.1. To redeploy the site: `cd site && vercel deploy --prod --yes`, after deleting any `.env.local`.
 
