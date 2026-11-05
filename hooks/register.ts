@@ -177,6 +177,51 @@ export function alreadyQueuedLead(waiting: string, checkpoint: string): string {
 /** What the auto-checkpoint helpers read of the module's state. */
 type Env = { home?: string; cwd?: string; profilePath?: string; transcriptPath?: string }
 
+/**
+ * What a session needs across a restart of its process (a resume starts module
+ * memory over): whether the save was offered in this stretch, a note not yet
+ * delivered, and the latest checkpoint's pointer. Seen 2026-11-05: the offer
+ * came twice with no compaction between, in two desktop sessions.
+ */
+type SessionRecord = { offered?: boolean; note?: string; checkpoint?: { path: string; savedAt: string }; at?: string }
+const RECORD_DAYS = 14
+
+async function loadRecord($: Dollar, id: string | undefined): Promise<SessionRecord | undefined> {
+  if (id === undefined) return undefined
+  try {
+    const value = await $.store.get(`session:${id}`)
+    return value !== null && typeof value === 'object' ? (value as SessionRecord) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function saveRecord($: Dollar, id: string | undefined, record: SessionRecord): Promise<void> {
+  if (id === undefined) return
+  try {
+    await $.store.set(`session:${id}`, JSON.parse(JSON.stringify({ ...record, at: new Date().toISOString() })))
+  } catch {
+    // no store beneath: this process's memory only
+  }
+}
+
+/** Records older than RECORD_DAYS go, so the store does not grow with every session. */
+async function pruneRecords($: Dollar): Promise<void> {
+  try {
+    const cutoff = Date.now() - RECORD_DAYS * 86_400_000
+    for (const key of await $.store.keys()) {
+      if (!key.startsWith('session:')) continue
+      const value = (await $.store.get(key)) as SessionRecord | undefined
+      if (value?.at === undefined || Date.parse(value.at) < cutoff) await $.store.delete(key)
+    }
+  } catch {
+    // keep them
+  }
+}
+
+/** Prompts that are the user's own; a peer's message, a task notification or a scheduled prompt is not. */
+const USER_PROMPTS = new Set(['composer', 'sdk', 'bridge'])
+
 /** Each Read target in a checkpoint's manifest, measured on disk now, before anything is wiped. */
 async function measureItems($: Dollar, manifest: Manifest, home: string | undefined): Promise<Measured[]> {
   const root = manifest.projectRoot ?? manifest.cwd
@@ -406,6 +451,10 @@ export const register: Register = (on, options) => {
   let isNudged = false
   /** The suggestion the model reads with the user's next message, once. */
   let note: string | undefined
+  /** This session's id: the key of its record in $.store. */
+  let sessionId: string | undefined
+  /** Where the prompt being submitted came from (prompt.submit runs before the classic hook, measured 2026-11-05). */
+  let lastPromptKind: string | undefined
   // autoRehydrate: "off" (default), "after-save" (after the plugin's own compaction), "always" (after Claude Code's too).
   const autoRehydrate = options.autoRehydrate === 'after-save' || options.autoRehydrate === 'always' ? options.autoRehydrate : 'off'
   let autoCompactAt: number | undefined
@@ -441,6 +490,18 @@ export const register: Register = (on, options) => {
       home = undefined
       profilePath = undefined
     }
+    try {
+      sessionId = await $.session.id()
+    } catch {
+      sessionId = undefined
+    }
+    const kept = await loadRecord($, sessionId)
+    if (kept !== undefined) {
+      isNudged = kept.offered === true
+      note = kept.note
+      lastCheckpoint = kept.checkpoint ?? lastCheckpoint
+    }
+    void pruneRecords($)
     await $.tool.register({
       name: TOOL,
       description:
@@ -518,6 +579,7 @@ export const register: Register = (on, options) => {
       queued = { ...request } // unreadable checkpoint or manifest: compact without the estimate
       lastCheckpoint = { path: request.checkpoint, savedAt: new Date().toISOString() }
     }
+    await saveRecord($, sessionId, { offered: isNudged, note, checkpoint: lastCheckpoint })
     // One /compact at a time. A save while an earlier one waits to run would compact the fresh summary again
     // (seen 2026-11-04: a /smart-compact:save typed during an automatic save ran right after it).
     if (expecting !== undefined) {
@@ -585,6 +647,7 @@ export const register: Register = (on, options) => {
       isNudged = false
       note = undefined
       compactions += 1
+      void saveRecord($, sessionId, { offered: false, checkpoint: lastCheckpoint })
       if (!isOurs && pending !== undefined) {
         // Claude Code compacted while a save's turn ran: the save's checkpoint stands, and its /compact must not follow.
         pending = undefined
@@ -624,12 +687,19 @@ export const register: Register = (on, options) => {
   on('classic.SessionStart', ($, e, next) => (notePath(e.transcript_path), next(e))).catch(($, e, next) => next(e))
   // The suggestion reaches the model with the user's next message, so its reply offers the save
   // (an SDK host such as the desktop app shows no prompt suggestion). Not with a smart-compact command.
+  on('prompt.submit', ($, e, next) => {
+    lastPromptKind = e.origin.kind
+    return next(e)
+  }).catch(($, e, next) => next(e))
   on('classic.UserPromptSubmit', async ($, e, next) => {
     notePath(e.transcript_path)
     const result = await next(e)
     if (note === undefined) return result
+    // The user's own message only: not a peer's, a task notification or a scheduled prompt (seen 2026-11-05).
+    if (lastPromptKind !== undefined && !USER_PROMPTS.has(lastPromptKind)) return result
     const extra = note
     note = undefined
+    await saveRecord($, sessionId, { offered: true, checkpoint: lastCheckpoint })
     if (/^\s*\/smart-compact:/.test(String((e as { prompt?: unknown }).prompt ?? ''))) return result
     return { ...result, additionalContext: [...(result?.additionalContext ?? []), extra] }
   }).catch(($, e, next) => next(e))
@@ -676,8 +746,9 @@ export const register: Register = (on, options) => {
           if (reason === undefined) return answered
           isNudged = true
           note = suggestionNote(context.tokens, reason, band, autoRehydrate !== 'off')
+          await saveRecord($, sessionId, { offered: true, note, checkpoint: lastCheckpoint })
           $.ui.log(
-            `smart-compact: context is at ≈${fmtK(context.tokens)} tokens, inside your ${fmtK(band.from)}–${fmtK(band.to)} band` +
+            `smart-compact: context is at ≈${fmtK(context.tokens)} tokens, ${context.tokens > band.to ? 'past the top of' : 'inside'} your ${fmtK(band.from)}–${fmtK(band.to)} band` +
               (reason === 'boundary' ? ', right after a round closed' : '') +
               `. /smart-compact:save checkpoints this session and compacts it; ${after}. Claude will offer it in its next reply.`,
           )
@@ -689,6 +760,7 @@ export const register: Register = (on, options) => {
         if (context.tokens >= threshold) {
           isNudged = true
           note = suggestionNote(context.tokens, 'point', undefined, autoRehydrate !== 'off')
+          await saveRecord($, sessionId, { offered: true, note, checkpoint: lastCheckpoint })
           $.ui.log(
             `smart-compact: context is at ≈${fmtK(context.tokens)} tokens (${Math.round((100 * context.tokens) / context.window)}% of the window). ` +
               `/smart-compact:save checkpoints this session and compacts it; ${after}.`,

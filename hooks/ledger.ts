@@ -335,7 +335,10 @@ export function suggestReason(tokens: number, band: { from: number; to: number }
 /** What the model reads with the user's next message, so its reply offers the save (desktop hosts show no prompt suggestion). */
 export function suggestionNote(tokens: number, reason: 'boundary' | 'top' | 'point', band?: { from: number; to: number }, isAutoRehydrate = false): string {
   const k = (n: number) => `${Math.round(n / 1000)}k`
-  const where = band === undefined ? '' : `, inside the ${k(band.from)}–${k(band.to)} range where the user wants to be offered a save`
+  const where =
+    band === undefined
+      ? ''
+      : `, ${tokens > band.to ? 'past the top of' : 'inside'} the ${k(band.from)}–${k(band.to)} range where the user wants to be offered a save`
   const why = reason === 'boundary' ? ', and a round just closed (a commit, merge, deploy or state-file write), so saving is cheap now' : ''
   const after = isAutoRehydrate ? 'rehydrating runs on its own afterwards' : 'rehydrating stays their choice'
   return (

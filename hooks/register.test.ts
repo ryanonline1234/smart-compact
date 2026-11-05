@@ -694,13 +694,13 @@ describe('settings: the band, delivered by the model, and autoRehydrate', () => 
     on('session.messages', () => ({ value: [{ role: 'user', text: 'keep going', toolUses: [] }] }) as never)
     await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
     await $.turn.complete(turnEnd('answer'))
-    expect(logs.join('\n')).toContain('inside your 600k–700k band.')
+    expect(logs.join('\n')).toContain('past the top of your 600k–700k band.')
   })
   test('a small window pulls the band below its own compaction point', { options: BAND }, async ($, on) => {
     const { logs } = engine(on, undefined, true, 151_000, FILES, 167_000)
     await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
     await $.turn.complete(turnEnd('answer'))
-    expect(logs.join('\n')).toContain('inside your 150k–150k band')
+    expect(logs.join('\n')).toContain('past the top of your 150k–150k band')
   })
   test('not delivered with a smart-compact command: the user is already saving', { options: BAND }, async ($, on) => {
     engine(on, undefined, true, 705_000, FILES, 967_000)
@@ -737,6 +737,49 @@ describe('settings: the band, delivered by the model, and autoRehydrate', () => 
     await clock.settle()
     await clock.advance(200)
     expect(commands.filter(c => c.command === 'smart-compact:rehydrate')).toEqual([])
+  })
+})
+
+describe('the offer across restarts and peer messages (0.5.1)', () => {
+  const BAND = { suggestFrom: 600_000, suggestTo: 700_000 }
+  const store = (on: On, kept: Record<string, unknown> = {}) => {
+    const saved: Record<string, unknown> = { ...kept }
+    on('session.id', () => ({ value: 's1' }) as never)
+    on('store.get', (_, e) => ({ value: saved[e.key] }) as never)
+    on('store.set', (_, e) => {
+      saved[e.key] = e.value
+      return { value: undefined } as never
+    })
+    on('store.keys', () => ({ value: Object.keys(saved) }) as never)
+    on('store.delete', (_, e) => {
+      delete saved[e.key]
+      return { value: undefined } as never
+    })
+    return saved
+  }
+  test('an offer made before a restart is not made again', { options: BAND }, async ($, on) => {
+    const { logs } = engine(on, undefined, true, 705_000, FILES, 967_000)
+    store(on, { 'session:s1': { offered: true, at: new Date().toISOString() } })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.turn.complete(turnEnd('answer'))
+    expect(logs.join('\n')).not.toContain('band')
+  })
+  test('the offer and its note are kept in the store when made', { options: BAND }, async ($, on) => {
+    const { logs } = engine(on, undefined, true, 705_000, FILES, 967_000)
+    const saved = store(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.turn.complete(turnEnd('answer'))
+    expect(logs.join('\n')).toContain('past the top of your 600k–700k band')
+    expect(saved['session:s1']).toMatchObject({ offered: true })
+    expect(String((saved['session:s1'] as { note?: string }).note)).toContain('past the top of the 600k–700k range')
+  })
+  // The peer-message rule needs the prompt.submit event, which a test's $ cannot raise (it is the op there): checked end to end.
+  test('a save stores the checkpoint pointer, so a later compaction keeps it after a restart', async ($, on) => {
+    engine(on)
+    const saved = store(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.tool.call({ tool: TOOL_ID, instructions: INSTRUCTIONS, checkpoint: CKPT } as never)
+    expect((saved['session:s1'] as { checkpoint?: { path: string } }).checkpoint?.path).toBe(CKPT)
   })
 })
 

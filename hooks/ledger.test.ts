@@ -173,6 +173,9 @@ describe('the save suggestion in a band', () => {
     expect(suggestReason(640_000, band, false)).toBe(undefined)
     expect(suggestReason(700_000, band, false)).toBe('top')
   })
+  test('past the top it says so (seen 2026-11-05 at 817k: "inside the 600k–700k range")', () => {
+    expect(suggestionNote(817_000, 'top', { from: 600_000, to: 700_000 })).toContain('≈817k tokens, past the top of the 600k–700k range')
+  })
   test('the note asks the model to offer the save once, and not run it', () => {
     const n = suggestionNote(640_000, 'boundary', { from: 600_000, to: 700_000 }, true)
     expect(n).toContain('≈640k tokens, inside the 600k–700k range')
