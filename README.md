@@ -1,15 +1,20 @@
 # smart-compact
 
-Checkpoint a Claude Code session before it compacts, compact it automatically, and rehydrate on your terms, with a measured estimate of what rehydrating brings back.
+Enforcement for Claude Code's compaction: what you decided and told it to keep survives, checked rather than hoped for.
 
 **Site:** [smart-compact.vercel.app](https://smart-compact.vercel.app)
 
-`/compact` replaces your conversation with one summary, and that summary decides what survives. smart-compact saves a curated checkpoint to disk first: your directives, decisions, dead ends, exact strings that must survive verbatim, and a manifest of what to re-read. Then it compacts for you. After compaction it tells you exactly what `/smart-compact:rehydrate` would put back and what that costs, so rebuilding is a choice instead of a guess.
+When Claude Code compacts, one summary decides what survives. Measured over the author's sessions, what got lost was standing rules ("never deploy without asking") and pending decision lists, the numbered questions a later "go with recs" answers. smart-compact keeps both, and it checks that they were kept:
+
+- **Every compaction carries a summary contract,** Claude Code's own automatic ones included. The contract asks for standing rules, open numbered decisions with their recommendations verbatim, and approvals with their conditions.
+- **The latest pending decision list is captured mechanically** and quoted into the compaction instructions word for word, so "go with recs" still points at the same list afterwards.
+- **A checkpoint on disk, with a carry-forward guard.** `/smart-compact:save` writes a checkpoint before compacting. The guard refuses a new checkpoint that silently drops a rule or open decision the previous one held. At a compaction you didn't start, a fork of the session writes the checkpoint alongside the summary, and the plugin checks and corrects it like a save.
+- **Rehydrating is measured, and yours to call:** the plugin tells you what `/smart-compact:rehydrate` would put back and what it costs, minus the files Claude Code already re-attached.
 
 ```
 /smart-compact:save          checkpoint to disk; compaction queued for the end of the turn
 (automatic)                  the plugin runs /compact with a pointer to the checkpoint
-/smart-compact:rehydrate     your call: re-read the checkpoint and its manifest, up to a budget
+/smart-compact:rehydrate     re-read the checkpoint and its manifest, up to a budget
 ```
 
 After the compaction, the plugin's notice reads like this:
@@ -25,14 +30,14 @@ Send /smart-compact:rehydrate to rebuild context from it, or keep working from t
 
 ## Install
 
-Requires Claude Code 2.1.309 or later with mods (function hooks) enabled, which is the default from 2.1.287. Tested end to end on 2.1.310 in stream-json mode, the mode the desktop app runs sessions in; the same hooks, before packaging, ran in the desktop app on 2.1.309.
+Requires Claude Code 2.1.309 or later with mods (function hooks) enabled, the default from 2.1.287. Tested end to end on 2.1.310 in stream-json mode, the mode the desktop app runs sessions in.
 
 ```bash
 claude plugin marketplace add ryanonline1234/smart-compact
 claude plugin install smart-compact@smart-compact
 ```
 
-Inside a session, `/plugin marketplace add ryanonline1234/smart-compact`, then `/plugin install smart-compact@smart-compact`, then `/reload-plugins`.
+Inside a session: `/plugin marketplace add ryanonline1234/smart-compact`, then `/plugin install smart-compact@smart-compact`, then `/reload-plugins`.
 
 ## Commands
 
@@ -43,25 +48,37 @@ Inside a session, `/plugin marketplace add ryanonline1234/smart-compact`, then `
 
 Checkpoints are plain markdown in `~/.claude/checkpoints/<project-slug>/`, keyed by the project's git root rather than the shell's directory. The newest ten are kept; older ones move to `archive/`.
 
-## Long-horizon sessions
+## What it keeps, and how
 
-Built for sessions that run for days: many rounds of feedback, several compactions, decisions answered with a short "go with recs". Measured on the author's own sessions (229 interactive sessions, 35 compactions), the context that got lost was standing rules and pending asks, and 5 of 7 losses followed compactions Claude Code started on its own. So 0.2 adds:
+Built for sessions that run for days: many rounds of feedback, several compactions, decisions answered with a short "go with recs". The author measured 229 of their own interactive sessions with 35 compactions. The context lost afterwards was standing rules and pending asks, and 5 of the 7 losses followed compactions Claude Code started on its own. That is one person's sessions, not a general result.
 
-- **A summary contract on every compaction, automatic ones included.** The plugin adds instructions to every compaction of the main conversation: keep standing rules with date and scope, every open numbered question with its recommendation (verbatim, so a later "go with recs" still points at the same list), approvals with their conditions, unfinished requests, iteration pointers, and methods that worked. It also re-states the latest checkpoint's pointer, so an opt-in rehydrate survives later compactions. In a forced automatic compaction with the contract on, the summary kept all three open questions and their recommendations; with it off, it kept none of them. Both kept the user's two rules. That is one run per arm.
+- **The summary contract.** The plugin adds instructions to every compaction of the main conversation:
+  - keep standing rules, with their date and scope;
+  - keep every open numbered question with its recommendation, verbatim;
+  - keep approvals with their conditions, unfinished requests, iteration pointers and methods that worked;
+  - keep the latest checkpoint's pointer.
+
+  **Measured:** in a forced automatic compaction with the contract on, the summary kept all three open questions and their recommendations verbatim in 3 of 3 runs; with it off, it kept none, in 3 of 3 runs. Both arms kept the user's two rules. Three runs per arm is small (two-sided Fisher on runs, p = 0.10). Each arm mixed two runs of 0.2 and one of 0.3.
+- **The pending list, captured mechanically.** At every compaction, the plugin finds the newest numbered list that asks something (a `?` or a recommendation), or a question asked with buttons, within the last six user messages. It quotes that list verbatim into the compaction instructions, with your reply if there is one. Whether quoting it inside the instructions beats appending it after the summary is being tested: `docs/04-placement-experiment.md`.
 - **Standing rules and open decisions lead the checkpoint and override the rest.** The task state has to agree with them.
-- **A carry-forward guard.** Each checkpoint names the one before it. The save tool refuses a checkpoint that drops a standing rule or an open decision the previous one held, until each is carried, or written as `retired:`, `answered:` or `promoted to <file>:`.
+- **The carry-forward guard.** Each checkpoint names the one before it. The save tool refuses a checkpoint that drops a standing rule or an open decision the previous one held, until each is carried, or written as `retired:`, `answered:` or `promoted to <file>:`. It also refuses an `answered:` line that doesn't quote what you said. Only you settle a question put to you.
+- **Checkpoints at compactions you didn't start** (Claude Code's threshold, a precomputed summary, a bare `/compact`).
+  - **How it's written:** a fork of the session writes it, alongside the summary: the same model reading the same transcript, with tools denied (Claude Code's `$.model.fork`). Its answer goes only to the file.
+  - **What the fork gets:** the save skill's rules, the template, your profile, the previous checkpoint, the pending decision, and the facts a save would look up with tools (git state, the state files' next action and open questions).
+  - **How it's checked:** like a manual save, with corrections asked for up to twice, then any dropped item carried verbatim and marked.
+  - **Measured:**
+    - Against 0.4.0's manual save, it matched on every rubric line in 3 of 3 A/B pairs.
+    - Against 0.5.0's improved manual save, it matched in 2 of 3 pairs. A blind judge scored the fork 60 of 75 and the manual save 65.
+    - Tuning is under way.
+
+  Option `checkpointOnCompact` (default on).
 - **Section targets.** A manifest can name `STATE.md#Next action` or `DECISIONS.md#last 3` instead of whole files, which grow large and are rewritten every round.
 
-### Adapting to the moment
-
-Measured on the same sessions, a pending numbered list is what a reply like "go with recs" answers, so the plugin keeps it:
-
-- **A checkpoint at every compaction Claude Code starts on its own** (at its threshold, precomputed in the background, or a bare `/compact`), at the quality of a manual save. A fork of the session writes it, alongside the summary. The fork is the same model reading the same transcript, with tools denied; its answer goes only to the file, and the session stays the same session. It gets the save skill's rules, the template, your profile, the previous checkpoint, the pending decision, and the facts a save would look up with tools (git state, the state files' next action and open questions, earlier checkpoints). The plugin checks the result like a manual save, with the carry-forward guard and manifest measurement. If a check refuses it, the plugin asks for a corrected version, up to twice, then carries any dropped item verbatim and marks it. A plugin-written checkpoint stands in when no fork can run. In a 3-pair A/B against manual saves, the fork matched the manual save on every rubric line in every pair. A blind judge scored each checkpoint against its own session and rated the fork at least as high on all five dimensions in all three pairs. Option `checkpointOnCompact` (default on).
-- **The pending decision list, captured mechanically.** At every compaction it finds the newest numbered list that asks something (a `?` or a recommendation), or a question asked with buttons, within the last six user messages. It quotes the list verbatim into the compaction instructions, with the user's reply if there is one, so "go with recs" never depends on the summarizer noticing the list.
+Keeping a rule in the summary is not the same as the model following it. Published work finds most violations after compaction happen while the rule is still in the compacted history (ARCBench, [arXiv 2611.03223](https://arxiv.org/abs/2611.03223)). smart-compact makes sure the rule is there; it can't make the model obey it.
 
 ### Profile
 
-`~/.claude/smart-compact/profile.md` (or the file `SMART_COMPACT_PROFILE` names) tailors all of this. Its **Summary contract** section replaces the built-in contract on every compaction; its **Save** and **Rehydrate** sections add to those commands. Edits apply from the next compaction.
+`~/.claude/smart-compact/profile.md` (or the file `SMART_COMPACT_PROFILE` names) tailors all of this. Its **Summary contract** section replaces the built-in contract on every compaction. Its **Save** and **Rehydrate** sections add to those commands. Edits apply from the next compaction.
 
 ```markdown
 ## Summary contract
@@ -97,8 +114,10 @@ Set them in `/config`, with `/plugin configure smart-compact@smart-compact`, or 
 
 ## How the estimate is measured
 
-- **At save time**, before anything is wiped, the plugin reads the checkpoint's rehydration manifest. It measures every file it lists on disk, honoring line ranges and the Read tool's 2,000-line default. Commands and searches can't be measured, so they keep the checkpoint's own guesses.
-- **Token ratios** come from measuring the Read tool's real output on Claude 5 models: 2.73 characters per token for prose and 2.49 for code, line-number prefixes included. Sonnet 5.5 and Opus 5.5 counted identically on every file. The common rules of thumb (4 and 3.2) undercount by 1.3 to 1.5 times.
+- **At save time**, before anything is wiped, the plugin reads the checkpoint's rehydration manifest. It measures every file listed there on disk, honoring line ranges and the Read tool's 2,000-line default. Commands and searches can't be measured, so they keep the checkpoint's own guesses.
+- **Token ratios** come from measuring the Read tool's real output, line-number prefixes included, on Claude 5.5 models: 2.73 characters per token for markdown and prose files, 2.49 for code. Sonnet 5.5 and Opus 5.5 counted identically on every file, as Anthropic documents for the tokenizer since Opus 4.7.
+  - **Not general prose:** clean English on the same tokenizer measures about 3.6 characters per token ([ClaudeCodeCamp](https://www.claudecodecamp.com/p/i-measured-claude-4-7-s-new-tokenizer-here-s-what-it-costs-you)). These are Read-tool output figures.
+  - **Against Claude Code's own estimate:** for 4.7 and later models, Claude Code (2.1.310) assumes 3 bytes per token. On this kind of text, that runs about 10% low for markdown and prose and 20% low for code. The old 4-characters rule runs 1.3 to 1.5 times low.
 - **After compaction**, Claude Code re-attaches up to five recent small files, and rehydrate skips anything already in context. The plugin reads the session transcript to see exactly which files came back, and leaves them out of the estimate.
 
 | File | Characters | Real tokens | Estimate | Error |
@@ -110,16 +129,53 @@ Set them in `/config`, with `/plugin configure smart-compact@smart-compact`, or 
 | Python `json/decoder.py` | 12,872 | 5,642 | 5,756 | +2.0% |
 | Python `json/encoder.py` | 16,148 | 6,433 | 7,200 | +11.9% |
 | synthetic TypeScript | 15,190 | 7,530 | 6,685 | −11.2% |
-| **All seven** | **101,151** | **42,375** | **42,598** | **+0.5%** |
+| All seven | 101,151 | 42,375 | 42,598 | +0.5% |
+
+Per file, the estimate is within 12%. The +0.5% for all seven is errors cancelling out, not per-file accuracy.
 
 In a full end-to-end run, the notice estimated ≈14.3k for rehydrate. The two files it then read cost about 15.2k at measured rates, and context grew 15.5k including the model's own tool calls. Reproduce both with the scripts below.
+
+## Prior art, and what is new
+
+Surveyed on 2026-11-05 across Claude Code's docs, its mod and plugin ecosystem, 14 other coding agents, agent-memory frameworks and 2026 papers. "Not found" means not in that survey, not proof that nothing exists. The full survey, with sources and confidence per mechanism: [`docs/03-novelty-assessment.md`](docs/03-novelty-assessment.md).
+
+**Not new, and credited:**
+- **Instructions in automatic compactions.** Other mods inject them too: [bindwright](https://github.com/starfoxcom/bindwright) compact-handoff, [handoff-compact](https://github.com/trytofly94/handoff-compact) and others. So do Codex's `compact_prompt`, Roo, Kilo and the Claude API's `instructions` field.
+- **Checkpointing before compaction:** [compact-plus](https://github.com/u-ichi/compact-plus), [Token Optimizer](https://github.com/alexgreensh/token-optimizer), and MemGPT in 2023.
+- **Forking the session at compaction:** bindwright's shadow mode, handoff-compact, and Anthropic's background compaction. The fork itself is Claude Code's `$.model.fork`.
+
+**Not found elsewhere:**
+- **The carry-forward guard,** which refuses a checkpoint that drops a rule or open decision the previous one held. The nearest work is Gemini CLI's constraint merge, which carries constraints forward but can still drop them, [Constraint Pinning](https://arxiv.org/html/2606.22528v2), and the [compacli-harness](https://github.com/rajesamp/compacli-harness) design.
+- **Mechanical capture of the pending decision list** into the compaction instructions.
+- **The contract's categories:** open decisions with their recommendations, and approvals with their conditions.
+- **Checking and correcting a fork-written checkpoint** while the stock summary stays in place.
+- **Rehydration that skips the files Claude Code itself re-attached.**
+
+Two other projects share the name: [hellosverre/smart-compact](https://github.com/hellosverre/smart-compact), about when to compact, and a skill in ryanportfolio/winuse-mcp.
 
 ## What the plugin's code can do
 
 It is a mod: code that runs inside Claude Code with your permissions. `claude plugin validate` lists exactly what it touches:
 
-- **Hooks:** `session.start` (registers its tool), `tool.call` (its own tool), `session.compact` (adds the summary contract and the pending list, writes the checkpoint for a compaction it did not start, and observes the outcome), `classic.SessionStart` and `classic.UserPromptSubmit` (to learn the transcript's path), `turn.complete`.
-- **Calls:** reads files listed in your checkpoint, the previous checkpoint, the profile and the session transcript; reads `HOME` and `SMART_COMPACT_PROFILE`; runs `/compact`; writes transcript notices and a prompt suggestion. At a compaction it did not start, it also runs read-only git commands (`rev-parse`, `status`, `log`, `ls-files`) in the project, sends one fork of the session (and up to two corrections) through the session's own client, and writes the checkpoint under `~/.claude/checkpoints/`. No other network, no other file writes. Turn the contract off with `summaryContract`, the compaction checkpoints with `checkpointOnCompact`.
+- **Hooks:**
+  - `session.start` (registers its tool);
+  - `tool.call` (its own tool);
+  - `session.compact` (adds the summary contract and the pending list, writes the checkpoint for a compaction it did not start, and observes the outcome);
+  - `classic.SessionStart` and `classic.UserPromptSubmit` (the transcript's path, and the save offer);
+  - `turn.complete`.
+- **Calls:**
+  - reads files listed in your checkpoint, the previous checkpoint, the profile and the session transcript;
+  - reads `HOME` and `SMART_COMPACT_PROFILE`;
+  - runs `/compact`, and `/smart-compact:rehydrate` when `autoRehydrate` is on;
+  - writes transcript notices and a prompt suggestion.
+- **At a compaction it did not start, it also:**
+  - runs read-only git commands (`rev-parse`, `status`, `log`, `ls-files`) in the project;
+  - sends one fork of the session, and up to two corrections, through the session's own client;
+  - writes the checkpoint under `~/.claude/checkpoints/`.
+
+  No other network calls, no other file writes.
+
+Turn the contract off with `summaryContract`, the compaction checkpoints with `checkpointOnCompact`.
 
 ## Develop
 
@@ -136,12 +192,14 @@ Load the working copy into a session with `claude --plugin-dir .`.
 
 ## Known limits
 
-- CJK text is unmeasured; the estimate assumes one character per token.
-- Detecting re-attached files reads Claude Code's transcript format, which can change between releases.
-- The engine's "after" token count leaves out the system prompt and tool definitions, so the notice says so instead of inventing a total.
-- A checkpoint written at Claude Code's own compaction cannot update the project's state files or rules doc, as a manual save does first; it lists those updates as to-dos.
-- Precomputed compactions (the summary built in the background) are covered by unit tests only: `claude -p` did not precompute in testing.
-- The carry-forward guard matches items by shared words. It can flag a rule that was reworded heavily; carrying it verbatim or retiring it by name always satisfies it.
+- **The evidence is small:** one person's sessions, a few runs per arm, a rubric the author wrote. Each claim above says how it was measured.
+- **Mods are new** (default-on since 2.1.287). The `session.compact` surface the plugin relies on is fully documented only in Claude Code's published type file, and open issues report rough edges around it.
+- **CJK text is unmeasured;** the estimate assumes one character per token.
+- **Re-attached files** are detected by reading Claude Code's transcript format, which can change between releases.
+- **The engine's "after" token count** leaves out the system prompt and tool definitions, so the notice says so instead of inventing a total.
+- **No state-file updates at a compaction you didn't start.** That checkpoint can't update the project's state files or rules doc the way a manual save does first; it lists those updates as to-dos.
+- **Precomputed compactions** (the summary built in the background) are covered by unit tests only: `claude -p` did not precompute in testing.
+- **The carry-forward guard matches items by shared words.** It can flag a rule that was reworded heavily; carrying it verbatim or retiring it by name always satisfies it.
 
 ## License
 
