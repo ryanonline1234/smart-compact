@@ -92,6 +92,22 @@ export function editedFilesOf(rows: readonly Row[]): string[] {
   return seen
 }
 
+/**
+ * Tracked files with uncommitted changes, from `git status --short`, as absolute
+ * paths: a save's own state-file flush often runs through Bash, which no Edit
+ * or Write call shows (seen 2026-11-05). Untracked and deleted files are left out.
+ */
+export function dirtyFiles(status: string | undefined, root: string): string[] {
+  const out: string[] = []
+  for (const line of (status ?? '').split('\n')) {
+    const code = line.slice(0, 2)
+    if (line.length < 4 || code === '??' || code.includes('D') || code.trim() === '') continue
+    const path = (line.slice(3).split(' -> ').pop() ?? '').replace(/^"|"$/g, '')
+    if (path !== '' && !out.includes(`${root}/${path}`)) out.push(`${root}/${path}`)
+  }
+  return out
+}
+
 /** The directory most of those files sit in: where to look for the project's git root. */
 export function projectDirGuess(files: readonly string[]): string | undefined {
   const counts = new Map<string, number>()

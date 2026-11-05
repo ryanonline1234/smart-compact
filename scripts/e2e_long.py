@@ -10,13 +10,16 @@
   double  A second queue call sent while a save is still running (as when the
          user types /smart-compact:save during an automatic save): the
          session should compact once, not twice.
+  settings  The 0.5 settings in a real session: a band (low, for the test) that
+         fires right after a commit, offered by the model in its next reply;
+         then a save that rehydrates on its own (autoRehydrate after-save).
   ab     The quality gate for checkpoints at Claude Code's own compactions: the
          same scripted session twice, one arm saving by hand near the point,
          the other letting Claude Code compact and the plugin's fork write the
          checkpoint. Both are graded on the same rubric; --runs N pairs.
 
 Usage:
-    python3 scripts/e2e_long.py [--scenario auto|saves|double|ab|all] [--runs N] [--model claude-sonnet-5-5] [--claude PATH]
+    python3 scripts/e2e_long.py [--scenario auto|saves|double|ab|settings|all] [--runs N] [--model claude-sonnet-5-5] [--claude PATH]
 Costs a few dollars and takes about ten minutes for both. Uses this repo as the
 plugin (--plugin-dir) and hides other plugin folders (CLAUDE_CODE_PLUGIN_DIRS).
 """
@@ -286,6 +289,40 @@ def run_double(claude: str, model: str, root: Path) -> dict:
     return result
 
 
+# ---------------------------------------------------------------- settings
+
+def run_settings(claude: str, model: str, root: Path) -> dict:
+    fix = write_fixture(root)
+    (fix / "notes.txt").write_text("start\n")
+    log = OUT / f"settings-{time.strftime('%Y%m%dT%H%M%S')}.jsonl"
+    opts = {"suggestAt": -1, "suggestFrom": 20_000, "suggestTo": 400_000, "autoRehydrate": "after-save"}
+    extra = ["--plugin-dir", str(REPO), "--permission-mode", "bypassPermissions", "--settings", json.dumps({"pluginConfigs": {"smart-compact@inline": {"options": opts}}})]
+    s = Session(claude, Path("/"), model, log, extra, BASE_ENV)
+    s.turn(f"In {fix}, append the line 'second' to notes.txt, then commit it with: DEVELOPER_DIR=/Library/Developer/CommandLineTools git -C {fix} commit -am 'notes: second'. Reply only: done.")
+    s.mark("next message")
+    s.turn("What is 2 + 2? Answer in one line.")
+    reply = (assistant_texts(read_log(log)) or [""])[-1]
+    s.mark("save")
+    s.turn("/smart-compact:save")
+    rehydrated = s.wait(lambda e: e.get("type") == "assistant" and "REHYDRATED:" in json.dumps(e.get("message", {})), 420)
+    s.wait(lambda e: e.get("type") == "result", 60)
+    s.close()
+    rows = read_log(log)
+    notices = [r.get("text", "").splitlines()[0][:160] for r in rows if r.get("subtype") == "ui_log" and r.get("plugin") == "smart-compact"]
+    result = {
+        "band_notice": next((n for n in notices if "band" in n), None),
+        "reply_offers_save": "/smart-compact:save" in reply,
+        "reply": reply[:300],
+        "compactions": [(r.get("compact_metadata") or {}).get("trigger") for r in rows if r.get("subtype") == "compact_boundary"],
+        "rehydrate_ran": rehydrated is not None,
+        "rehydrate_said": "".join(b.get("text", "") for b in (rehydrated or {}).get("message", {}).get("content", []) if b.get("type") == "text")[:300],
+        "notices": notices,
+        "log": str(log),
+    }
+    cleanup(fix)
+    return result
+
+
 # ---------------------------------------------------------------- ab
 
 NOTE = "The refresh window should be computed from the server clock, not the client clock, because mobile clients drift by minutes. "
@@ -376,6 +413,18 @@ def edited_files(log: Path) -> list[str]:
     return out
 
 
+def dirty_files(fix: Path) -> list[str]:
+    """Tracked files the session left changed in the fixture repo: what a save flushed through Bash shows only here."""
+    env = {**os.environ, "DEVELOPER_DIR": "/Library/Developer/CommandLineTools"}
+    r = subprocess.run(["git", "-C", str(fix), "status", "--short"], env=env, capture_output=True, text=True)
+    out = []
+    for line in r.stdout.splitlines():
+        code = line[:2]
+        if len(line) > 3 and code != "??" and "D" not in code and code.strip():
+            out.append(line[3:].split(" -> ")[-1])
+    return out
+
+
 def grade(p0: str, p1: str, fix: Path, questions: list[str], edited: list[str] | None = None) -> dict:
     """The rubric, from the measured loss types: rules, open decisions verbatim, approvals with conditions, carry-forward, task state, manifest, links."""
     s1, s2, s3 = section(p1, "standing rules"), section(p1, "open decisions"), section(p1, "task state")
@@ -461,7 +510,7 @@ def run_ab_arm(claude: str, model: str, root: Path, arm: str, out: dict) -> None
         "checkpoints": [c.name for c in cps],
         "questions": questions,
         "earlier_items": len([l for l in section(texts[0], "open decisions").split("\n") if re.match(r"^\s*\d\.", l)]) if texts else None,
-        "grade": grade(texts[0], texts[-1], fix, questions, edited_files(log)) if len(texts) >= 2 else None,
+        "grade": grade(texts[0], texts[-1], fix, questions, sorted(set(edited_files(log)) | set(dirty_files(fix)))) if len(texts) >= 2 else None,
         "final_text": texts[-1] if texts else "",
         "user_messages": [r["message"]["content"] for r in read_log(log) if r.get("type") == "user" and isinstance(r.get("message", {}).get("content"), str)],
         "written_by": (re.search(r"^written_by:\s*(.+)$", texts[-1], re.M) or [None, "manual save"])[1] if texts else None,
@@ -573,7 +622,7 @@ def run_ab(claude: str, model: str, root: Path, runs: int, arms: tuple[str, ...]
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--scenario", choices=["auto", "saves", "double", "ab", "both", "all"], default="all")
+    parser.add_argument("--scenario", choices=["auto", "saves", "double", "ab", "settings", "both", "all"], default="all")
     parser.add_argument("--model", default="claude-sonnet-5-5")
     parser.add_argument("--claude")
     parser.add_argument("--runs", type=int, default=3)
@@ -585,6 +634,8 @@ def main() -> None:
         root = Path(tmp)
         if args.scenario in ("saves", "both", "all"):
             print(json.dumps({"saves": run_saves(claude, args.model, root)}, indent=1), flush=True)
+        if args.scenario == "settings":
+            print(json.dumps({"settings": run_settings(claude, args.model, root)}, indent=1), flush=True)
         if args.scenario == "ab":
             print(json.dumps({"ab": run_ab(claude, args.model, root, args.runs, tuple(args.arms.split(",")))}, indent=1), flush=True)
         if args.scenario in ("double", "all"):

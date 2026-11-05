@@ -438,7 +438,7 @@ const USAGE = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, c
 const answered = (text: string): Answer => ({ isAnswered: true, text, usage: USAGE })
 
 /** The engine, plus what a checkpoint at a compaction the plugin did not start calls: git, folders, writes, the fork. */
-function forkEngine(on: On, o: { fork?: () => Answer; complete?: () => Answer; compactAnswer?: object } = {}) {
+function forkEngine(on: On, o: { fork?: () => Answer; complete?: () => Answer; compactAnswer?: object; status?: string } = {}) {
   const files: Record<string, string> = { ...FILES, [PREV]: AUTO_PREVIOUS, '/Users/x/proj/STATE.md': '# State\n## Next action\nShip the login fix.\n## Open questions\n1. Deploy? Rec: yes.\n' }
   const base = engine(on, o.compactAnswer, true, 1_000, files)
   const forks: string[] = []
@@ -465,7 +465,7 @@ function forkEngine(on: On, o: { fork?: () => Answer; complete?: () => Answer; c
           : cmd === 'rev-parse --short HEAD'
             ? 'abc1234'
             : cmd === 'status --short'
-              ? ' M src/auth.ts'
+              ? (o.status ?? ' M src/auth.ts')
               : cmd === 'log --oneline -5'
                 ? 'abc1234 fix: login'
                 : ''
@@ -649,10 +649,17 @@ ${answer}
     files[NEW] = saving('- answered: Deploy main now? ("yes")')
     const queued = await $.tool.call({ tool: TOOL_ID, instructions, checkpoint: NEW } as never)
     const said = JSON.stringify(queued)
-    expect(said).toContain('Edited this session but not in §7: HANDOFF/02_RULES.md.')
+    expect(said).toContain('Changed this session (edited, or uncommitted in git) but not in §7: HANDOFF/02_RULES.md.')
     expect(said).not.toContain('src/auth.ts,') // listed in §7
     expect(said).not.toContain('login-next.ckpt.md') // the checkpoint itself
     expect(said).not.toContain('other.ts') // only read
+  })
+  test('a state file the save flushed through Bash is found by git, not by any Edit call', async ($, on) => {
+    const { files } = forkEngine(on, { status: ' M STATE.md\n M src/auth.ts\n?? notes/\n' })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    files[NEW] = saving('- answered: Deploy main now? ("yes")')
+    const queued = await $.tool.call({ tool: TOOL_ID, instructions, checkpoint: NEW } as never)
+    expect(JSON.stringify(queued)).toContain('but not in §7: STATE.md.')
   })
 })
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { autoName, carryDropped, composeCheckpoint, droppedItems, dropMissingTargets, editedFilesOf, fallbackCheckpoint, forkPrompt, gapAppendix, newestCheckpoint, projectDirGuess, recentFilesOf, stampOf, writeStepsFrom } from './autockpt'
+import { autoName, carryDropped, composeCheckpoint, dirtyFiles, droppedItems, dropMissingTargets, editedFilesOf, fallbackCheckpoint, forkPrompt, gapAppendix, newestCheckpoint, projectDirGuess, recentFilesOf, stampOf, writeStepsFrom } from './autockpt'
 import type { AutoInput } from './autockpt'
 import { carryForwardGaps } from './ledger'
 import { ASKING, AUTO_PREVIOUS } from './test-fixtures'
@@ -46,6 +46,10 @@ describe('names and the project', () => {
     expect(files).toEqual(['/Users/x/proj/src/login.ts', '/Users/x/.claude/memory/x.md', '/Users/x/proj/src/auth.ts'])
     expect(projectDirGuess(files)).toBe('/Users/x/proj/src')
     expect(projectDirGuess([])).toBe(undefined)
+  })
+  test('tracked files with uncommitted changes, however they were changed; not untracked or deleted ones', () => {
+    expect(dirtyFiles(' M STATE.md\nM  docs/DECISIONS.md\nR  a.md -> HANDOFF/02_RULES.md\n?? notes/\n D gone.md\n', '/p')).toEqual(['/p/STATE.md', '/p/docs/DECISIONS.md', '/p/HANDOFF/02_RULES.md'])
+    expect(dirtyFiles(undefined, '/p')).toEqual([])
   })
   test('edited files only, newest first: reads do not count', () => {
     expect(editedFilesOf(rows)).toEqual(['/Users/x/proj/src/login.ts'])

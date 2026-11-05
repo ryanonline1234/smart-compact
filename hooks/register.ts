@@ -1,5 +1,5 @@
 import type { Hook, Register } from 'claude-code'
-import { autoName, carryDropped, CHECKPOINT_NAME, composeCheckpoint, droppedItems, dropMissingTargets, editedFilesOf, fallbackCheckpoint, forkPrompt, gapAppendix, newestCheckpoint, projectDirGuess, recentFilesOf, retryPrompt, slugOf, writeStepsFrom } from './autockpt'
+import { autoName, carryDropped, CHECKPOINT_NAME, composeCheckpoint, dirtyFiles, droppedItems, dropMissingTargets, editedFilesOf, fallbackCheckpoint, forkPrompt, gapAppendix, newestCheckpoint, projectDirGuess, recentFilesOf, retryPrompt, slugOf, writeStepsFrom } from './autockpt'
 import type { AutoInput, DiskFacts } from './autockpt'
 import { estimateDetails, estimateLine, estimateOf, fmtK, isRead, measureTarget, parseCheckpoint, reattachedFromTranscript, readTarget, tokensOf } from './estimate'
 import type { Estimate, Manifest, Measured } from './estimate'
@@ -131,7 +131,7 @@ export function queuedReport(
   }
   if (uncovered.length > 0) {
     lines.push(
-      `Edited this session but not in §7: ${uncovered.join(', ')}. Add the ones rehydration needs (a section or line range is enough) and call this tool again; leave out the ones it doesn't.`,
+      `Changed this session (edited, or uncommitted in git) but not in §7: ${uncovered.join(', ')}. Add the ones rehydration needs (a section or line range is enough) and call this tool again; leave out the ones it doesn't.`,
     )
   }
   lines.push('Finish the turn now with the SAVE report; anything done after the save is not in the checkpoint.')
@@ -160,8 +160,7 @@ export function uncoveredEdits(edited: readonly string[], manifest: Manifest, ho
       .filter((p): p is string => p !== undefined)
       .map(samePath),
   )
-  return edited
-    .map(samePath)
+  return [...new Set(edited.map(samePath))]
     .filter(f => f !== samePath(checkpoint) && (home === undefined || !f.startsWith(`${home}/.claude/`)) && (base === undefined || f.startsWith(`${base}/`)) && !listed.has(f))
     .map(f => (base !== undefined && f.startsWith(`${base}/`) ? f.slice(base.length + 1) : f))
 }
@@ -501,11 +500,16 @@ export const register: Register = (on, options) => {
       const unquoted = unquotedAnswers(prior, saved)
       if (unquoted.length > 0) return { deny: quoteDeny(unquoted) }
       const measured = await measureItems($, manifest, home)
+      // Changed this session: Edit and Write calls, and tracked files left uncommitted (a flush through Bash shows only there).
+      let edited: string[] = []
       try {
-        uncovered = uncoveredEdits(editedFilesOf((await $.session.messages()) as unknown as readonly Row[]), manifest, home, request.checkpoint)
+        edited = editedFilesOf((await $.session.messages()) as unknown as readonly Row[])
       } catch {
-        uncovered = [] // no transcript to read: nothing to compare
+        edited = [] // no transcript to read
       }
+      const root = manifest.projectRoot ?? manifest.cwd
+      const dirty = root === undefined ? [] : dirtyFiles(await git($, root, ['status', '--short']), root)
+      uncovered = uncoveredEdits([...edited, ...dirty], manifest, home, request.checkpoint)
       const checkpointTokens = tokensOf(request.checkpoint, saved.length, saved.split('\n').length, saved)
       queued = { ...request, estimate: estimateOf(manifest, measured, checkpointTokens), manifest, measured, checkpointTokens }
       const created = saved.match(/^created:\s*(\S+)/m)?.[1]
