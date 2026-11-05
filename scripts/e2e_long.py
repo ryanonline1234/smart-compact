@@ -33,8 +33,10 @@ from pathlib import Path
 
 from session import Session, find_claude, read_log, requests
 
-REPO = Path(__file__).resolve().parent.parent
-OUT = Path(__file__).parent / "out"
+# SC_PLUGIN_DIR measures another build with this harness (a before/after); SC_OUT keeps results out of a worktree,
+# whose removal deletes its ignored out/ folder (lost a gate run that way on 2026-11-04).
+REPO = Path(os.environ.get("SC_PLUGIN_DIR") or Path(__file__).resolve().parent.parent)
+OUT = Path(os.environ.get("SC_OUT") or Path(__file__).parent / "out")
 RUN_TAG = time.strftime("%Y%m%dT%H%M%S")
 MARKER = "SC-CONTRACT-MARKER"
 BASE_ENV = {"CLAUDE_CODE_PLUGIN_DIRS": "/nonexistent"}
@@ -344,7 +346,37 @@ def carried(item: str, later: str) -> bool:
     return False
 
 
-def grade(p0: str, p1: str, fix: Path, questions: list[str]) -> dict:
+def transcript_rows(log: Path) -> list[dict]:
+    """Claude Code's own transcript of the session behind a stream log (the stream does not echo the user's messages)."""
+    sid = next((r.get("session_id") for r in read_log(log) if r.get("subtype") == "init"), None)
+    found = list((Path.home() / ".claude" / "projects").glob(f"*/{sid}.jsonl")) if sid else []
+    rows = []
+    for line in (found[0].read_text().splitlines() if found else []):
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+    return rows
+
+
+def edited_files(log: Path) -> list[str]:
+    """Project files the session edited before its last compaction, relative to the fixture's proj/ folder."""
+    rows = transcript_rows(log)
+    stop = max((i for i, r in enumerate(rows) if r.get("subtype") == "compact_boundary"), default=len(rows))
+    out: list[str] = []
+    for r in rows[:stop]:
+        content = r.get("message", {}).get("content") if isinstance(r.get("message"), dict) else None
+        for b in content or [] if r.get("type") == "assistant" else []:
+            if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") in ("Edit", "Write", "MultiEdit"):
+                path = str((b.get("input") or {}).get("file_path", ""))
+                if "/proj/" in path and not path.endswith(".ckpt.md"):
+                    rel = path.split("/proj/", 1)[1]
+                    if rel not in out:
+                        out.append(rel)
+    return out
+
+
+def grade(p0: str, p1: str, fix: Path, questions: list[str], edited: list[str] | None = None) -> dict:
     """The rubric, from the measured loss types: rules, open decisions verbatim, approvals with conditions, carry-forward, task state, manifest, links."""
     s1, s2, s3 = section(p1, "standing rules"), section(p1, "open decisions"), section(p1, "task state")
     p0_open = [l for l in section(p0, "open decisions").split("\n") if re.match(r"^\s*\d\.", l)]
@@ -360,7 +392,16 @@ def grade(p0: str, p1: str, fix: Path, questions: list[str]) -> dict:
         "manifest_targets_exist": int(len(targets) >= 2 and all(target_exists(t, fix) for t in targets)),
         "links_previous": int(bool(fm("previous")) and fm("previous").endswith(".ckpt.md") and fm("previous") != "none"),
         "next_action_filled": int(bool(fm("next_action")) and not fm("next_action").startswith("<") and fm("next_action") != "see §3"),
+        # Added 2026-11-05 for the manual-save fixes: the defects the blind judge found.
+        "next_action_has_approved_work": int(bool(re.search(r"round 5|deploy", fm("next_action") + " " + next_line(s3), re.I))),
+        "answers_quote_user": int(bool(answered := [l for l in s2.split("\n") if re.match(r"^\s*[-*]\s*(?:\*\*)?answered\b", l, re.I)]) and all(re.search(r"[\"“][^\"”]{2,}[\"”]", l) for l in answered)),
+        "manifest_covers_edits": int(edited is not None and all(any(e in t for t in targets) for e in edited)),
     }
+
+
+def next_line(task_state: str) -> str:
+    m = re.search(r"\*\*Next action:\*\*\s*(.+)", task_state)
+    return m.group(1) if m else ""
 
 
 def run_ab_arm(claude: str, model: str, root: Path, arm: str, out: dict) -> None:
@@ -420,7 +461,7 @@ def run_ab_arm(claude: str, model: str, root: Path, arm: str, out: dict) -> None
         "checkpoints": [c.name for c in cps],
         "questions": questions,
         "earlier_items": len([l for l in section(texts[0], "open decisions").split("\n") if re.match(r"^\s*\d\.", l)]) if texts else None,
-        "grade": grade(texts[0], texts[-1], fix, questions) if len(texts) >= 2 else None,
+        "grade": grade(texts[0], texts[-1], fix, questions, edited_files(log)) if len(texts) >= 2 else None,
         "final_text": texts[-1] if texts else "",
         "user_messages": [r["message"]["content"] for r in read_log(log) if r.get("type") == "user" and isinstance(r.get("message", {}).get("content"), str)],
         "written_by": (re.search(r"^written_by:\s*(.+)$", texts[-1], re.M) or [None, "manual save"])[1] if texts else None,
@@ -509,18 +550,18 @@ def judge_pair(claude: str, manual: dict, fork: dict) -> dict:
     return {"manual": m, "fork": f, "fork_minus_manual": diff}
 
 
-def run_ab(claude: str, model: str, root: Path, runs: int) -> dict:
+def run_ab(claude: str, model: str, root: Path, runs: int, arms: tuple[str, ...] = ("manual", "fork")) -> dict:
     pairs = []
     for n in range(1, runs + 1):
         out: dict = {}
-        threads = [threading.Thread(target=run_ab_arm, args=(claude, model, root / f"ab{n}-{arm}", arm, out)) for arm in ("manual", "fork")]
+        threads = [threading.Thread(target=run_ab_arm, args=(claude, model, root / f"ab{n}-{arm}", arm, out)) for arm in arms]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
         a, b = (out.get("manual") or {}).get("grade"), (out.get("fork") or {}).get("grade")
         verdict = None if not a or not b else {k: ("pass" if b[k] >= a[k] else "FAIL") for k in a}
-        judged = judge_pair(claude, out["manual"], out["fork"]) if a and b else None
+        judged = judge_pair(claude, out["manual"], out["fork"]) if a and b else {arm: judge_checkpoint(claude, out[arm]["final_text"], Path(out[arm]["log"])) for arm in arms if (out.get(arm) or {}).get("final_text")}
         pairs.append({"run": n, "manual": out.get("manual"), "fork": out.get("fork"), "fork_vs_manual": verdict, "judge": judged})
         brief = lambda arm: {k: v for k, v in (out.get(arm) or {}).items() if k not in ("final_text", "user_messages")}
         print(json.dumps({"run": n, "manual": brief("manual"), "fork": brief("fork"), "fork_vs_manual": verdict, "judge": judged}, indent=1), flush=True)
@@ -536,6 +577,7 @@ def main() -> None:
     parser.add_argument("--model", default="claude-sonnet-5-5")
     parser.add_argument("--claude")
     parser.add_argument("--runs", type=int, default=3)
+    parser.add_argument("--arms", default="manual,fork", help="ab only: manual, fork, or both (default)")
     args = parser.parse_args()
     OUT.mkdir(exist_ok=True)
     claude = find_claude(args.claude)
@@ -544,7 +586,7 @@ def main() -> None:
         if args.scenario in ("saves", "both", "all"):
             print(json.dumps({"saves": run_saves(claude, args.model, root)}, indent=1), flush=True)
         if args.scenario == "ab":
-            print(json.dumps({"ab": run_ab(claude, args.model, root, args.runs)}, indent=1), flush=True)
+            print(json.dumps({"ab": run_ab(claude, args.model, root, args.runs, tuple(args.arms.split(",")))}, indent=1), flush=True)
         if args.scenario in ("double", "all"):
             print(json.dumps({"double": run_double(claude, args.model, root)}, indent=1), flush=True)
         if args.scenario in ("auto", "both", "all"):

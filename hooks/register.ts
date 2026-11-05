@@ -1,9 +1,9 @@
 import type { Hook, Register } from 'claude-code'
-import { autoName, carryDropped, CHECKPOINT_NAME, composeCheckpoint, droppedItems, dropMissingTargets, fallbackCheckpoint, forkPrompt, gapAppendix, newestCheckpoint, projectDirGuess, recentFilesOf, retryPrompt, slugOf, writeStepsFrom } from './autockpt'
+import { autoName, carryDropped, CHECKPOINT_NAME, composeCheckpoint, droppedItems, dropMissingTargets, editedFilesOf, fallbackCheckpoint, forkPrompt, gapAppendix, newestCheckpoint, projectDirGuess, recentFilesOf, retryPrompt, slugOf, writeStepsFrom } from './autockpt'
 import type { AutoInput, DiskFacts } from './autockpt'
 import { estimateDetails, estimateLine, estimateOf, fmtK, isRead, measureTarget, parseCheckpoint, reattachedFromTranscript, readTarget, tokensOf } from './estimate'
 import type { Estimate, Manifest, Measured } from './estimate'
-import { askInstruction, carryForwardGaps, contractFrom, nudgeThreshold, pendingAsk, pointerLine, PROFILE_PATH, sectionText, withContract } from './ledger'
+import { askInstruction, carryForwardGaps, contractFrom, nudgeThreshold, pendingAsk, pointerLine, PROFILE_PATH, sectionText, unquotedAnswers, withContract } from './ledger'
 import type { Row } from './ledger'
 
 // smart-compact's hooks module. /smart-compact:save writes a checkpoint, then
@@ -111,22 +111,56 @@ export function carryForwardDeny(previous: string, gaps: { rules: string[]; deci
 export function queuedReport(
   estimate: Estimate | undefined,
   lead = 'Queued. Claude Code compacts this conversation as soon as this turn ends, with these instructions.',
+  uncovered: readonly string[] = [],
 ): string {
   const lines = [lead]
   if (estimate !== undefined) {
     lines.push(`Measured: ${estimateLine(estimate)} Quote this in the SAVE report.`)
     if (estimate.missingTargets.length > 0) {
-      lines.push(`Not found on disk, so rehydrate cannot read them: ${estimate.missingTargets.join(', ')}. Fix those §6 paths and call this tool again.`)
+      lines.push(`Not found on disk, so rehydrate cannot read them: ${estimate.missingTargets.join(', ')}. Fix those §7 paths and call this tool again.`)
     }
     if (estimate.overBudgetTargets.length > 0) {
       lines.push(
         `Past rebuild_budget, so rehydrate stops before them: ${estimate.overBudgetTargets.join(', ')}. ` +
-          'If they matter, move them up or trim §6, then call this tool again.',
+          'If they matter, move them up or trim §7, then call this tool again.',
       )
     }
   }
+  if (uncovered.length > 0) {
+    lines.push(
+      `Edited this session but not in §7: ${uncovered.join(', ')}. Add the ones rehydration needs (a section or line range is enough) and call this tool again; leave out the ones it doesn't.`,
+    )
+  }
   lines.push('Finish the turn now with the SAVE report; anything done after the save is not in the checkpoint.')
   return lines.join(' ')
+}
+
+/** Pure: the refusal when `answered:` lines don't quote the user. */
+export function quoteDeny(unquoted: readonly string[]): string {
+  return (
+    `Not queued: ${unquoted.length} answered line(s) settle a question without the user's words: ${unquoted.map(x => `"${x}"`).join('; ')}. ` +
+    'Only the user settles a question: quote what they said, as in `answered: <question> ("<the user\'s words>")`, or carry the question as open if they have not answered it. Then call this tool again.'
+  )
+}
+
+/** macOS reports /private/var/... from git where a path elsewhere says /var/...: compare them as one. */
+const samePath = (p: string) => p.replace(/^\/private(?=\/(?:var|tmp)\/)/, '')
+
+/** Pure: files the session edited that the manifest leaves out, relative to the project (judged 2026-11-04: a save left out the rules doc it had just written). */
+export function uncoveredEdits(edited: readonly string[], manifest: Manifest, home: string | undefined, checkpoint: string): string[] {
+  const root = manifest.projectRoot ?? manifest.cwd
+  const base = root === undefined ? undefined : samePath(root)
+  const listed = new Set(
+    manifest.items
+      .filter(isRead)
+      .map(i => readTarget(i.target, root, home)?.path)
+      .filter((p): p is string => p !== undefined)
+      .map(samePath),
+  )
+  return edited
+    .map(samePath)
+    .filter(f => f !== samePath(checkpoint) && (home === undefined || !f.startsWith(`${home}/.claude/`)) && (base === undefined || f.startsWith(`${base}/`)) && !listed.has(f))
+    .map(f => (base !== undefined && f.startsWith(`${base}/`) ? f.slice(base.length + 1) : f))
 }
 
 /** Pure: the lead when a compaction queued in an earlier turn has not run yet; a second one would compact its summary again. */
@@ -297,7 +331,9 @@ async function writeAuto($: Dollar, input: AutoInput, rows: readonly Row[], home
     model = undefined
   }
   while (attempts < MAX_ATTEMPTS && model !== undefined) {
-    const refusal = input.previous === undefined ? undefined : carryForwardDeny(input.previous.path, carryForwardGaps(input.previous.text, text))
+    const carry = input.previous === undefined ? undefined : carryForwardDeny(input.previous.path, carryForwardGaps(input.previous.text, text))
+    const unquoted = unquotedAnswers(input.previous?.text, text)
+    const refusal = [carry, unquoted.length === 0 ? undefined : quoteDeny(unquoted)].filter(x => x !== undefined).join('\n') || undefined
     const missing = await missingIn(text)
     if (refusal === undefined && missing.length === 0) break
     const why = [refusal, missing.length === 0 ? undefined : `These §7 targets are not on disk: ${missing.join(', ')}. Correct their paths or drop those rows.`].filter(x => x !== undefined).join('\n')
@@ -434,13 +470,14 @@ export const register: Register = (on, options) => {
       return { deny: `No file at ${request.checkpoint}: write the checkpoint before queuing the compaction.` }
     }
     let queued: Queued
+    let uncovered: string[] = []
     // Measured now, before anything is wiped: each Read target's size on disk.
     try {
       const saved = await $.fs.read(request.checkpoint)
       const manifest = parseCheckpoint(saved)
       // Carry-forward: a save may not silently drop what the previous checkpoint still needed.
+      let prior: string | undefined
       if (manifest.previous !== undefined) {
-        let prior: string | undefined
         try {
           prior = await $.fs.read(manifest.previous)
         } catch {
@@ -449,7 +486,15 @@ export const register: Register = (on, options) => {
         const refusal = prior === undefined ? undefined : carryForwardDeny(manifest.previous, carryForwardGaps(prior, saved))
         if (refusal !== undefined) return { deny: refusal }
       }
+      // Only the user settles a question: an answered line quotes them.
+      const unquoted = unquotedAnswers(prior, saved)
+      if (unquoted.length > 0) return { deny: quoteDeny(unquoted) }
       const measured = await measureItems($, manifest, home)
+      try {
+        uncovered = uncoveredEdits(editedFilesOf((await $.session.messages()) as unknown as readonly Row[]), manifest, home, request.checkpoint)
+      } catch {
+        uncovered = [] // no transcript to read: nothing to compare
+      }
       const checkpointTokens = tokensOf(request.checkpoint, saved.length, saved.split('\n').length, saved)
       queued = { ...request, estimate: estimateOf(manifest, measured, checkpointTokens), manifest, measured, checkpointTokens }
       const created = saved.match(/^created:\s*(\S+)/m)?.[1]
@@ -465,7 +510,7 @@ export const register: Register = (on, options) => {
       return { result: queuedReport(queued.estimate, alreadyQueuedLead(expecting.checkpoint, queued.checkpoint)) }
     }
     pending = queued
-    return { result: queuedReport(queued.estimate) }
+    return { result: queuedReport(queued.estimate, undefined, uncovered) }
   }).catch(($, e, next) =>
     next.called ? next(e) : { deny: `${PLUGIN}: its handler failed, so nothing was queued. Fall back to the manual /compact line.` },
   )

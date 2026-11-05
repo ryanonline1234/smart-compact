@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { askInstruction, blocks, carryForwardGaps, contractFrom, DEFAULT_CONTRACT, extractList, isCarried, isSettled, listItems, nudgeThreshold, pendingAsk, pointerLine, sectionText, withContract } from './ledger'
+import { askInstruction, blocks, carryForwardGaps, unquotedAnswers, contractFrom, DEFAULT_CONTRACT, extractList, isCarried, isSettled, listItems, nudgeThreshold, pendingAsk, pointerLine, sectionText, withContract } from './ledger'
 import { ASKING } from './test-fixtures'
 
 const PREVIOUS = `---
@@ -94,6 +94,19 @@ describe('carry-forward between checkpoints', () => {
   })
   test('matching needs most of the words, not one', () => {
     expect(isCarried('Push means production: ask before any push', ['ask Ryan about the push button colour'])).toBe(false)
+  })
+})
+
+describe('only the user settles a question', () => {
+  const later = (answer: string) => `## 1. Standing rules\n- Claude tests its own work\n- Push means production: ask before any push\n\n## 2. Open decisions\n${answer}\n- answered: Five-brief measurement round next? ("yes, after the merge")\n`
+  test("an answer to a previous open question must quote the user's words", () => {
+    expect(unquotedAnswers(PREVIOUS, later('- answered: Use scikit-fem for the load test? (Ryan approved it)'))).toEqual(['answered: Use scikit-fem for the load test? (Ryan approved it)'])
+    expect(unquotedAnswers(PREVIOUS, later('- answered: Use scikit-fem for the load test? ("go with recs")'))).toEqual([])
+    expect(unquotedAnswers(PREVIOUS, later("- answered: Use scikit-fem for the load test? (Ryan: 'go with recs')"))).toEqual([])
+  })
+  test('an older settled line it does not settle now is left alone; with no previous checkpoint, every answered line counts', () => {
+    expect(unquotedAnswers(PREVIOUS, later('- answered: Use scikit-fem? ("yes")\n- answered: an old question from last week (settled)'))).toEqual([])
+    expect(unquotedAnswers(undefined, '## 2. Open decisions\n- answered: Deploy now? (yes)\n')).toEqual(['answered: Deploy now? (yes)'])
   })
 })
 

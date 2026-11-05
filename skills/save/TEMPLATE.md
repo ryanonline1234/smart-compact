@@ -29,13 +29,15 @@ compaction (the project's CLAUDE.md, its rules doc, auto memory): write it there
 Every numbered question put to the user that is not settled: numbering as asked, the options,
 and the recommendation, verbatim, so "go with recs" still points at the same list.
 `1. <question> Options: <a>, <b>. Rec: <rec>.`
-Settled since `previous`: `- answered: <question> ("<the user's words, conditions included>")`.
+Settled since `previous`: `- answered: <question> ("<the user's words, conditions included>")`. Only the user settles a
+question: what you did on your own does not answer it.
 Then the user's requests that are not done yet: `- request: <what> (asked <date>)`.
 
 ## 3. Task state
 Goal (one line). Plan with progress markers (done / doing / todo).
 Must agree with §1: where they differ, §1 wins and this section is the one to fix.
-**Next action:** one imperative line — the first thing to do after rehydration.
+**Next action:** one imperative line — the first unfinished item of the plan above, approved work that has not run
+included. If it waits on the user's answer, say so and name what can run meanwhile.
 
 ## 4. Decisions, with rationale
 Append-order: `<decision> — because <why> [file:line if applicable]`

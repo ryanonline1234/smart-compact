@@ -75,6 +75,23 @@ export function recentFilesOf(rows: readonly Row[], max = 12): string[] {
   return seen
 }
 
+const EDIT_TOOLS = /^(?:Edit|MultiEdit|Write|NotebookEdit)$/
+
+/** Absolute files the main loop edited or wrote, newest first, each once. */
+export function editedFilesOf(rows: readonly Row[]): string[] {
+  const seen: string[] = []
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const uses = rows[i]?.toolUses ?? []
+    for (let j = uses.length - 1; j >= 0; j--) {
+      const u = uses[j]
+      if (u === undefined || !EDIT_TOOLS.test(u.tool)) continue
+      const path = u.input?.file_path ?? u.input?.notebook_path
+      if (typeof path === 'string' && path.startsWith('/') && !seen.includes(path)) seen.push(path)
+    }
+  }
+  return seen
+}
+
 /** The directory most of those files sit in: where to look for the project's git root. */
 export function projectDirGuess(files: readonly string[]): string | undefined {
   const counts = new Map<string, number>()

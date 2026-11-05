@@ -156,6 +156,23 @@ export function carryForwardGaps(previous: string, next: string): { rules: strin
   return { rules: rules.map(clip), decisions: decisions.map(clip) }
 }
 
+/** A quoted span: the user's words, in double or single quotes. */
+const QUOTED = /(?:^|[\s(:—-])["“'‘][^"”'’\n]{2,}["”'’]/
+
+/**
+ * `answered:` lines without the user's words: those settling a question the
+ * previous checkpoint left open, or, with no previous checkpoint, every one in
+ * the open-decisions section. Only the user settles a question (judged
+ * 2026-11-04: a save retired an offer Ryan never answered, because it had acted
+ * on its own), and the template's answered line quotes them.
+ */
+export function unquotedAnswers(previous: string | undefined, next: string): string[] {
+  const answered = DECISION_TITLES.flatMap(t => listItems(next, t)).filter(x => /^(~~|\*\*)?\s*answered\b/i.test(x))
+  const open = previous === undefined ? undefined : DECISION_TITLES.flatMap(t => listItems(previous, t)).filter(o => !isSettled(o))
+  const settling = open === undefined ? answered : answered.filter(a => open.some(o => isCarried(o, [a])))
+  return settling.filter(a => !QUOTED.test(a)).map(a => (a.length > 140 ? `${a.slice(0, 140)}…` : a))
+}
+
 /**
  * When to suggest saving: `suggestAt` tokens (0: no cap of its own; -1: never),
  * never later than 60% of the point where Claude Code compacts on its own.

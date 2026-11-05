@@ -600,3 +600,57 @@ describe('a checkpoint at every compaction the plugin did not start', () => {
     expect(autoFile()).toBe(undefined)
   })
 })
+
+describe('the manual save, judged 2026-11-04', () => {
+  const NEW = `${CKPT_DIR}/20261104T200000Z-login-next.ckpt.md`
+  const saving = (answer: string) => `---
+created: 2026-11-04T20:00:00Z
+project_root: /Users/x/proj
+previous: ${PREV}
+rebuild_budget: 150k
+next_action: Ship the login fix
+---
+
+## 1. Standing rules
+- Claude tests its own work (stated 2026-10-29, scope: always)
+- Push means production: ask before any push (stated 2026-10-20, scope: always)
+
+## 2. Open decisions
+${answer}
+- answered: Use the supplier API or scrape the price pages? ("scrape the price pages instead")
+
+## 7. Rehydration manifest
+
+| # | action | target | anchor | ~tokens | why |
+|---|--------|--------|--------|---------|-----|
+| 1 | Read | src/auth.ts | — | 1k | edit site |
+`
+  const instructions = `The summary must contain, verbatim: "Task: login. CHECKPOINT: ${NEW}. Rehydrate from it only when the user sends /smart-compact:rehydrate."`
+  test("a question settled without the user's words is refused until the line quotes them", async ($, on) => {
+    const { files } = forkEngine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    files[NEW] = saving('- answered: Deploy main now? (approved)')
+    const refused = await $.tool.call({ tool: TOOL_ID, instructions, checkpoint: NEW } as never)
+    expect(String(refused.deny)).toContain("settle a question without the user's words")
+    expect(String(refused.deny)).toContain('answered: Deploy main now? (approved)')
+    files[NEW] = saving('- answered: Deploy main now? ("Go with recs on 1 and 3")')
+    const queued = await $.tool.call({ tool: TOOL_ID, instructions, checkpoint: NEW } as never)
+    expect(queued.deny).toBe(undefined)
+  })
+  test('files the session edited that the manifest leaves out are named', async ($, on) => {
+    const { files } = forkEngine(on)
+    on('session.messages', () => ({ value: [
+      { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'a', tool: 'Edit', input: { file_path: '/Users/x/proj/src/auth.ts' } }] },
+      { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'b', tool: 'Write', input: { file_path: '/Users/x/proj/HANDOFF/02_RULES.md' } }, { tool_use_id: 'c', tool: 'Write', input: { file_path: NEW } }] },
+      { role: 'assistant', text: '', toolUses: [{ tool_use_id: 'd', tool: 'Read', input: { file_path: '/Users/x/proj/src/other.ts' } }] },
+    ] }) as never)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    files[NEW] = saving('- answered: Deploy main now? ("yes")')
+    const queued = await $.tool.call({ tool: TOOL_ID, instructions, checkpoint: NEW } as never)
+    const said = JSON.stringify(queued)
+    expect(said).toContain('Edited this session but not in §7: HANDOFF/02_RULES.md.')
+    expect(said).not.toContain('src/auth.ts,') // listed in §7
+    expect(said).not.toContain('login-next.ckpt.md') // the checkpoint itself
+    expect(said).not.toContain('other.ts') // only read
+  })
+})
