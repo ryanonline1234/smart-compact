@@ -1,6 +1,6 @@
 {
   "name": "smart-compact",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Checkpoint a Claude Code session before compacting, compact it automatically, and rehydrate on your terms with a measured estimate of what comes back.",
   "author": {
     "name": "Ryan Tseng",
@@ -28,6 +28,12 @@
       "type": "boolean",
       "title": "Summary contract on every compaction",
       "description": "Add the summary contract (standing rules, open decisions, counters, and the latest checkpoint's pointer) to every compaction, automatic ones included. The contract comes from the 'Summary contract' section of ~/.claude/smart-compact/profile.md when present.",
+      "default": true
+    },
+    "checkpointOnCompact": {
+      "type": "boolean",
+      "title": "Checkpoint at Claude Code's own compactions",
+      "description": "When Claude Code compacts on its own (at its threshold, precomputed in the background, or a bare /compact), write a checkpoint for it: a fork of this session writes it with the save skill's rules, alongside the summary. Costs one cached request per compaction. Off: only /smart-compact:save writes checkpoints.",
       "default": true
     }
   }

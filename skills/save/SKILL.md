@@ -27,6 +27,7 @@ argument-hint: "[rebuild budget, e.g. 100k]"
 ## Steps
 
 0. **Guard and profile.** If this context is freshly compacted (a compact summary visible) and nothing new has happened since — no new instruction, answer, decision or work — confirm before saving: there is nothing to add. If anything new happened, save without asking; `previous` and the carry-forward check keep the earlier checkpoint's rules and open decisions. If `~/.claude/smart-compact/profile.md` exists, read it now: its **Save** section adds to these steps and wins where they differ.
+   When Claude Code compacted on its own, the plugin already wrote a checkpoint for that compaction (the summary's `CHECKPOINT:` line names a `…-auto.ckpt.md`); a save now adds only what happened since, with that file as `previous`.
 1. **Flush durable state first.** If the project keeps state files (a `STATE.md`, a `DECISIONS.md`, a changelog), update them now. Then promote standing rules that outlive this session to where Claude Code re-injects them after every compaction: the project's `CLAUDE.md` or rules doc, or auto memory. The cheapest thing to rehydrate is something that never left. The checkpoint records only what no file on disk can.
 2. **Paths.** Key the checkpoint by the **project**, not the shell: desktop sessions often run with `pwd` at `/`, which would file every project's checkpoints together. `ROOT` is the git top level of the project this session works on (the directory holding the files you edited), else that directory:
    ```bash
@@ -39,7 +40,7 @@ argument-hint: "[rebuild budget, e.g. 100k]"
    ```
    `previous:` in the frontmatter is `$CKPT_DIR/$PREV` when `PREV` is set, else `none`.
 3. **Write the checkpoint** to `$CKPT` following [TEMPLATE.md](TEMPLATE.md):
-   - **§1 Standing rules and §2 Open decisions first, and complete.** Read `previous` (when set) and carry every rule and every open decision forward. Drop one only by writing it as `retired: …`, `answered: …` or `promoted to <file>: …`. The tool refuses a checkpoint that silently drops one.
+   - **§1 Standing rules and §2 Open decisions first, and complete.** Read `previous` (when set) and carry every rule and every open decision forward; a `previous` marked `written_by: plugin` carries items no model judged, so settle any the conversation settled. Drop one only by writing it as `retired: …`, `answered: …` or `promoted to <file>: …`. The tool refuses a checkpoint that silently drops one.
    - **§2 verbatim:** copy the latest numbered questions exactly as you asked them, with options and each recommendation, so a later "go with recs" resolves to the same list. Record each approval with its conditions.
    - **§3 must agree with §1.** If the task state still says something a later rule overrode ("Ryan tests on preview" after "Claude tests its own work"), fix §3.
    - Dense and factual. No narrative recap of the conversation's journey. `file:line` pointers instead of file contents, except in the verbatim vault.
@@ -65,6 +66,7 @@ argument-hint: "[rebuild budget, e.g. 100k]"
 
 ## Notes
 
+- **Compactions this skill did not start** (Claude Code's own at its threshold, a precomputed one, a bare `/compact`) get a checkpoint too: the plugin asks a fork of the main thread (the same model over the same transcript, tools denied) to write one by these same steps and template, checks it with the same carry-forward guard and manifest measurement, and corrects or repairs it. The session stays the same session; the fork's answer goes only to the file. Option `checkpointOnCompact` (default on).
 - The plugin's hooks module supplies the tool and the summary contract. It runs `/compact` as if the user typed it, because the mod API's direct compact call is refused in SDK hosts such as the desktop app. After compaction it shows what rehydrating would add, measured on disk before the wipe, minus files compaction already put back.
 - The contract comes from the **Summary contract** section of the profile when there is one, else a built-in default.
 - Instructions given to `/compact` reach the summarizer, but verbatim placement is not guaranteed. Rehydrate never depends on the pointer surviving.

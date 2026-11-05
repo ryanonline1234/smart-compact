@@ -33,3 +33,30 @@ export const ASKING = [
   '',
   'Say "go with recs" and I start.',
 ].join('\n')
+
+// A previous checkpoint in today's shape (rules and decisions first), for the auto-checkpoint tests.
+export const AUTO_PREVIOUS = `---
+created: 2026-11-04T12:00:00Z
+project_root: /Users/x/proj
+previous: none
+rebuild_budget: 150k
+next_action: fix login
+---
+
+## 1. Standing rules
+- Claude tests its own work (stated 2026-10-29, scope: always)
+- Push means production: ask before any push (stated 2026-10-20, scope: always)
+
+## 2. Open decisions
+1. Deploy main now? Rec: yes.
+2. Use the supplier API or scrape the price pages? Options: API, scrape. Rec: API.
+
+## 3. Task state
+Goal: fix login.
+
+## 7. Rehydration manifest
+
+| # | action | target | anchor | ~tokens | why |
+|---|--------|--------|--------|---------|-----|
+| 1 | Read | src/auth.ts | — | 1k | edit site |
+`
