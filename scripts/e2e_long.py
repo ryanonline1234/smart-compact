@@ -10,9 +10,13 @@
   double  A second queue call sent while a save is still running (as when the
          user types /smart-compact:save during an automatic save): the
          session should compact once, not twice.
+  ab     The quality gate for checkpoints at Claude Code's own compactions: the
+         same scripted session twice, one arm saving by hand near the point,
+         the other letting Claude Code compact and the plugin's fork write the
+         checkpoint. Both are graded on the same rubric; --runs N pairs.
 
 Usage:
-    python3 scripts/e2e_long.py [--scenario auto|saves|double|all] [--model claude-sonnet-5-5] [--claude PATH]
+    python3 scripts/e2e_long.py [--scenario auto|saves|double|ab|all] [--runs N] [--model claude-sonnet-5-5] [--claude PATH]
 Costs a few dollars and takes about ten minutes for both. Uses this repo as the
 plugin (--plugin-dir) and hides other plugin folders (CLAUDE_CODE_PLUGIN_DIRS).
 """
@@ -23,10 +27,11 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
-from session import Session, find_claude, read_log
+from session import Session, find_claude, read_log, requests
 
 REPO = Path(__file__).resolve().parent.parent
 OUT = Path(__file__).parent / "out"
@@ -278,11 +283,174 @@ def run_double(claude: str, model: str, root: Path) -> dict:
     return result
 
 
+# ---------------------------------------------------------------- ab
+
+NOTE = "The refresh window should be computed from the server clock, not the client clock, because mobile clients drift by minutes. "
+QUESTION = re.compile(r"^\s*\**\d\.\s.*\?.*Rec", re.I)
+
+
+def section(md: str, title: str) -> str:
+    """The text under the first heading that contains title, to the next heading of its level or higher."""
+    lines = md.split("\n")
+    start, level = -1, 0
+    for i, line in enumerate(lines):
+        m = re.match(r"^(#{1,6})\s+(.*)$", line)
+        if not m:
+            continue
+        if start == -1:
+            if title in m.group(2).lower():
+                start, level = i, len(m.group(1))
+        elif len(m.group(1)) <= level:
+            return "\n".join(lines[start + 1:i])
+    return "\n".join(lines[start + 1:]) if start != -1 else ""
+
+
+def manifest_targets(md: str) -> list[str]:
+    out = []
+    for line in section(md, "rehydration manifest").split("\n"):
+        cells = [c.strip() for c in line.split("|")]
+        if len(cells) > 4 and cells[1].isdigit() and cells[2].lower() == "read":
+            out.append(cells[3].strip("`"))
+    return out
+
+
+def target_exists(target: str, root: Path) -> bool:
+    path = re.split(r"[#:]", target, maxsplit=1)[0].strip()
+    p = Path(path).expanduser()
+    return (p if p.is_absolute() else root / p).exists()
+
+
+STOP = {"the", "and", "for", "with", "that", "this", "from", "are", "was", "not", "but", "you", "all", "any", "its", "has", "have", "into", "than", "then", "when", "what", "will", "can", "only", "options", "option", "rec", "recs", "recommendation", "stated", "scope"}
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9$']+", text.lower()) if len(w) >= 3 and w not in STOP}
+
+
+def carried(item: str, later: str) -> bool:
+    """As the plugin's own check (ledger.ts isCarried): most of the item's words in one block, or a settled line naming its question."""
+    bare = re.sub(r"\([^)]*\)", " ", re.sub(r"^\s*\d\.\s*", "", item))
+    want = _words(bare)
+    name = _words(re.split(r"(?<=[?.!])\s", bare, maxsplit=1)[0])
+    share = lambda a, b: 1.0 if not a else len(a & b) / len(a)
+    for block in re.split(r"\n(?=\s*(?:[-*]|\d+\.)\s)", later):
+        have = _words(block)
+        if share(want, have) >= 0.6:
+            return True
+        if re.match(r"^\s*[-*]?\s*(?:~~|\*\*)?\s*(retired|answered|done|superseded|promoted)\b", block, re.I) and share(name, have) >= 0.6:
+            return True
+    return False
+
+
+def grade(p0: str, p1: str, fix: Path, questions: list[str]) -> dict:
+    """The rubric, from the measured loss types: rules, open decisions verbatim, approvals with conditions, carry-forward, task state, manifest, links."""
+    s1, s2, s3 = section(p1, "standing rules"), section(p1, "open decisions"), section(p1, "task state")
+    p0_open = [l for l in section(p0, "open decisions").split("\n") if re.match(r"^\s*\d\.", l)]
+    targets = manifest_targets(p1)
+    fm = lambda k: (re.search(rf"^{k}:\s*(.+)$", p1, re.M) or [None, ""])[1].strip()
+    return {
+        "rules_of_3": sum(words_hit(r, s1, 3) for r in ("you test your own work", "never push without asking", "keep commits small")),
+        "new_questions_verbatim_of_3": verbatim_lines(questions, s2),
+        "new_questions_present_of_3": sum(words_hit(q, s2, 5) for q in questions),
+        "approval_with_condition": int(bool(re.search(r"answered[^\n]*(scrape|price pages)", s2, re.I) or re.search(r"scrape[^\n]*price", s2, re.I))),
+        "previous_decisions_carried": sum(carried(q, p1) for q in p0_open),
+        "task_state_has_the_edit": int(bool(re.search(r"csv and json|handoff/05", s3, re.I))),
+        "manifest_targets_exist": int(len(targets) >= 2 and all(target_exists(t, fix) for t in targets)),
+        "links_previous": int(bool(fm("previous")) and fm("previous").endswith(".ckpt.md") and fm("previous") != "none"),
+        "next_action_filled": int(bool(fm("next_action")) and not fm("next_action").startswith("<") and fm("next_action") != "see §3"),
+    }
+
+
+def run_ab_arm(claude: str, model: str, root: Path, arm: str, out: dict) -> None:
+    fix = write_fixture(root)
+    (fix / "notes").mkdir()
+    for i in range(1, 11):
+        (fix / "notes" / f"notes-{i}.md").write_text("\n".join(f"Note {i}.{j}: {NOTE * 3}" for j in range(90)))
+    log = OUT / f"ab-{arm}-{root.name}-{time.strftime('%H%M%S')}.jsonl"
+    env = {**BASE_ENV, "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "150000"}
+    extra = ["--plugin-dir", str(REPO), "--permission-mode", "bypassPermissions",
+             "--settings", json.dumps({"pluginConfigs": {"smart-compact@inline": {"options": {"suggestAt": -1}}}})]
+    s = Session(claude, Path("/"), model, log, extra, env)
+    notice = lambda part: (lambda e: e.get("type") == "system" and e.get("subtype") == "ui_log" and part in e.get("text", ""))
+    boundary = lambda: [r for r in read_log(log) if r.get("subtype") == "compact_boundary"]
+    s.turn(
+        f"We're working on the project at {fix}. Read the 'Next action' and 'Open questions' sections of {fix}/STATE.md (not the whole file). "
+        "Standing rules from now on: you test your own work; never push without asking me. Then list the open decisions, numbered, each with your recommendation. Do not change any files."
+    )
+    s.mark("first save")
+    s.turn("/smart-compact:save")
+    s.wait(notice("compacted"), 300)
+    s.wait(lambda e: e.get("type") == "result", 30)
+    s.mark("work")
+    s.turn(
+        "Go with recs on 1 and 3, but on 2 scrape the price pages instead. New rule from now on: keep commits small. "
+        f"Now, with the Edit tool, add the line 'Export check covers CSV and JSON.' under '## 1. Built' in {fix}/HANDOFF/05_EXPORT_CHECK.md. Then reply only: done."
+    )
+    s.turn("Ask me exactly three numbered questions about the parts-cost check (HANDOFF/06), each followed by your recommendation, in the form 'N. <question>? Rec: <recommendation>.' Do not read any files yet.")
+    asked = next((t for t in reversed(assistant_texts(read_log(log))) if len([l for l in t.split("\n") if QUESTION.match(l)]) >= 3), "")
+    questions = [l.strip() for l in asked.split("\n") if QUESTION.match(l)][:3]
+    s.mark("fill")
+    first_compactions = len(boundary())
+    status = "no compaction"
+    for i in range(1, 11):
+        s.turn(f"Read {fix}/notes/notes-{i}.md in full with the Read tool, then reply only with: read {i}.")
+        if len(boundary()) > first_compactions:
+            if arm == "manual":
+                status = "invalid: Claude Code compacted before the manual save"
+            else:
+                done = s.wait(notice("a checkpoint for it was"), 420)
+                status = "fork checkpoint" if done else "engine compacted, no checkpoint notice"
+            break
+        reqs = requests(read_log(log))
+        if arm == "manual" and reqs and reqs[-1]["context"] >= 88_000:
+            s.mark("second save")
+            s.turn("/smart-compact:save")
+            s.wait(notice("compacted"), 300)
+            status = "manual checkpoint"
+            break
+    time.sleep(3)
+    s.close()
+    cps = checkpoints_for(fix)
+    texts = [c.read_text() for c in cps]
+    out[arm] = {
+        "status": status,
+        "checkpoints": [c.name for c in cps],
+        "questions": questions,
+        "grade": grade(texts[0], texts[-1], fix, questions) if len(texts) >= 2 else None,
+        "written_by": (re.search(r"^written_by:\s*(.+)$", texts[-1], re.M) or [None, "manual save"])[1] if texts else None,
+        "compactions": [(r.get("compact_metadata") or {}).get("trigger") for r in read_log(log) if r.get("subtype") == "compact_boundary"],
+        "log": str(log),
+    }
+    keep = OUT / "ab-checkpoints" / root.name / arm
+    keep.mkdir(parents=True, exist_ok=True)
+    for c in cps:
+        (keep / c.name).write_text(c.read_text())
+    cleanup(fix)
+
+
+def run_ab(claude: str, model: str, root: Path, runs: int) -> dict:
+    pairs = []
+    for n in range(1, runs + 1):
+        out: dict = {}
+        threads = [threading.Thread(target=run_ab_arm, args=(claude, model, root / f"ab{n}-{arm}", arm, out)) for arm in ("manual", "fork")]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        a, b = (out.get("manual") or {}).get("grade"), (out.get("fork") or {}).get("grade")
+        verdict = None if not a or not b else {k: ("pass" if b[k] >= a[k] else "FAIL") for k in a}
+        pairs.append({"run": n, "manual": out.get("manual"), "fork": out.get("fork"), "fork_vs_manual": verdict})
+        print(json.dumps(pairs[-1], indent=1), flush=True)
+    passed = sum(1 for p in pairs if p["fork_vs_manual"] and all(v == "pass" for v in p["fork_vs_manual"].values()))
+    return {"pairs_passed": f"{passed} of {runs}", "gate": "pass" if passed == runs else "FAIL"}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--scenario", choices=["auto", "saves", "double", "both", "all"], default="all")
+    parser.add_argument("--scenario", choices=["auto", "saves", "double", "ab", "both", "all"], default="all")
     parser.add_argument("--model", default="claude-sonnet-5-5")
     parser.add_argument("--claude")
+    parser.add_argument("--runs", type=int, default=3)
     args = parser.parse_args()
     OUT.mkdir(exist_ok=True)
     claude = find_claude(args.claude)
@@ -290,6 +458,8 @@ def main() -> None:
         root = Path(tmp)
         if args.scenario in ("saves", "both", "all"):
             print(json.dumps({"saves": run_saves(claude, args.model, root)}, indent=1), flush=True)
+        if args.scenario == "ab":
+            print(json.dumps({"ab": run_ab(claude, args.model, root, args.runs)}, indent=1), flush=True)
         if args.scenario in ("double", "all"):
             print(json.dumps({"double": run_double(claude, args.model, root)}, indent=1), flush=True)
         if args.scenario in ("auto", "both", "all"):
