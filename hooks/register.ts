@@ -1,5 +1,5 @@
 import type { Hook, Register } from 'claude-code'
-import { autoName, carryDropped, CHECKPOINT_NAME, composeCheckpoint, dirtyFiles, droppedItems, dropMissingTargets, editedFilesOf, fallbackCheckpoint, forkPrompt, gapAppendix, newestCheckpoint, projectDirGuess, recentFilesOf, retryPrompt, slugOf, writeStepsFrom } from './autockpt'
+import { autoName, carryDropped, CHECKPOINT_NAME, composeCheckpoint, dirtyFiles, droppedItems, dropMissingTargets, editedFilesOf, fallbackCheckpoint, forkPrompt, gapAppendix, newestCheckpoint, projectDirGuess, recentFilesOf, retryPrompt, slugOf, turnState, writeStepsFrom } from './autockpt'
 import type { AutoInput, DiskFacts } from './autockpt'
 import { estimateDetails, estimateLine, estimateOf, fmtK, isRead, measureTarget, parseCheckpoint, reattachedFromTranscript, readTarget, tokensOf } from './estimate'
 import type { Estimate, Manifest, Measured } from './estimate'
@@ -270,7 +270,7 @@ async function gatherFacts($: Dollar, rows: readonly Row[], env: Env): Promise<D
   } catch {
     handoff = undefined
   }
-  return { projectRoot, cwd: cwd ?? '/', git: gitFacts, checkpointDir, listing, state, decisions, handoff, recentFiles }
+  return { projectRoot, cwd: cwd ?? '/', git: gitFacts, checkpointDir, listing, state, decisions, handoff, recentFiles, turn: turnState(rows) }
 }
 
 /**

@@ -44,6 +44,7 @@ argument-hint: "[rebuild budget, e.g. 100k]"
    - **§2 verbatim:** copy the latest numbered questions exactly as you asked them, with options and each recommendation, so a later "go with recs" resolves to the same list. Record each approval with its conditions.
    - **§3 must agree with §1.** If the task state still says something a later rule overrode ("Ryan tests on preview" after "Claude tests its own work"), fix §3.
    - **The next action is the first unfinished item of §3's plan,** approved work that has not run included: an approved deploy, test or merge is next work, not background. When it waits on the user's answer, say so and name what can run meanwhile. The frontmatter `next_action` is the same line.
+   - **Refer to the user by name or as "they":** their pronouns are not stated, so never he/him/his or she/her.
    - **Only the user settles a question put to them.** Something you did on your own (promoting a rule you offered to save, choosing for them) is not an answer: carry the question as open. An `answered:` line quotes the user's words; the tool refuses one that doesn't.
    - Dense and factual. No narrative recap of the conversation's journey. `file:line` pointers instead of file contents, except in the verbatim vault.
    - **Never duplicate what's already on disk** (state files, CLAUDE.md, git history, committed code): the manifest re-reads it instead.

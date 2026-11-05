@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { autoName, carryDropped, composeCheckpoint, dirtyFiles, droppedItems, dropMissingTargets, editedFilesOf, fallbackCheckpoint, forkPrompt, gapAppendix, newestCheckpoint, projectDirGuess, recentFilesOf, stampOf, writeStepsFrom } from './autockpt'
+import { autoName, carryDropped, composeCheckpoint, dirtyFiles, droppedItems, dropMissingTargets, editedFilesOf, fallbackCheckpoint, turnState, forkPrompt, gapAppendix, newestCheckpoint, projectDirGuess, recentFilesOf, stampOf, writeStepsFrom } from './autockpt'
 import type { AutoInput } from './autockpt'
 import { carryForwardGaps } from './ledger'
 import { ASKING, AUTO_PREVIOUS } from './test-fixtures'
@@ -158,3 +158,28 @@ describe('without a model', () => {
     expect(gapAppendix(rows, 4)).toBe(undefined)
   })
 })
+
+describe('where the turn stood at the compaction', () => {
+  const read4 = { role: 'user' as const, text: 'Read notes/notes-4.md in full, then reply only with: read 4.', toolUses: [] }
+  test('a call that returned, with the reply not yet written: mid-turn, the call done', () => {
+    const t = turnState([...rows, read4, { role: 'assistant', text: '', toolUses: [{ tool: 'Read', input: { file_path: '/p/notes/notes-4.md' }, text: 'Note 4.1 …' }] }])
+    expect(t.latestUser).toBe('Read notes/notes-4.md in full, then reply only with: read 4.')
+    expect(t.isMidTurn).toBe(true)
+    expect(t.calls).toEqual([{ tool: 'Read', on: '/p/notes/notes-4.md', hasReturned: true }])
+  })
+  test('a call still running has no result yet; an answered message is not mid-turn', () => {
+    expect(turnState([read4, { role: 'assistant', text: '', toolUses: [{ tool: 'Bash', input: { command: 'npm test' } }] }]).calls).toEqual([{ tool: 'Bash', on: 'npm test', hasReturned: false }])
+    expect(turnState([read4, { role: 'assistant', text: 'read 4', toolUses: [] }]).isMidTurn).toBe(false)
+  })
+  test('the fork reads the turn as facts, and the four corrections', () => {
+    const facts = { ...input().facts, turn: turnState([read4, { role: 'assistant', text: '', toolUses: [{ tool: 'Read', input: { file_path: '/p/notes/notes-4.md' }, text: '…' }] }]) }
+    const p = forkPrompt(input({ facts }))
+    expect(p).toContain(`the user's latest message, verbatim: "Read notes/notes-4.md in full, then reply only with: read 4."`)
+    expect(p).toContain('compacted in the middle of the reply to that message. Calls made since it: Read /p/notes/notes-4.md (returned).')
+    expect(p).toContain('never write he, him or his')
+    expect(p).toContain('A call that returned is done')
+    expect(p).toContain('approved work that has not run included')
+    expect(p).toContain('including any further sign-off')
+  })
+})
+

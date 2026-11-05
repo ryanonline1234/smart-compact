@@ -28,6 +28,8 @@ export type DiskFacts = {
   handoff?: string
   /** Files the main loop read or edited, newest first. */
   recentFiles: readonly string[]
+  /** Where the turn stood when Claude Code compacted (turnState). */
+  turn?: TurnState
 }
 
 export type AutoInput = {
@@ -108,6 +110,40 @@ export function dirtyFiles(status: string | undefined, root: string): string[] {
   return out
 }
 
+/** Where the conversation stood at the compaction: the user's latest message, and whether the assistant had answered it. */
+export type TurnState = {
+  latestUser?: string
+  /** The assistant has not yet given its reply to that message. */
+  isMidTurn: boolean
+  /** Tool calls made since that message, newest last: what each was on, and whether its result came back. */
+  calls: { tool: string; on: string; hasReturned: boolean }[]
+}
+
+/**
+ * The turn as the compaction caught it. Judged 2026-11-05: a fork called a Read
+ * "not done" when the call had returned and only the reply was missing.
+ */
+export function turnState(rows: readonly Row[]): TurnState {
+  let at = -1
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]
+    if (r?.role === 'user' && r.text.trim() !== '' && !r.text.trimStart().startsWith('<')) {
+      at = i
+      break
+    }
+  }
+  const after = rows.slice(at + 1)
+  const calls = after.flatMap(r =>
+    (r.toolUses ?? []).map(u => {
+      const on = u.input?.file_path ?? u.input?.command ?? u.input?.pattern ?? u.input?.query ?? ''
+      return { tool: u.tool, on: clip(String(on), 160), hasReturned: u.text !== undefined || u.result !== undefined }
+    }),
+  )
+  const last = after.filter(r => r.role === 'assistant').pop()
+  const isMidTurn = last === undefined || (last.toolUses ?? []).length > 0 || last.text.trim() === ''
+  return { latestUser: at === -1 ? undefined : clip(rows[at]?.text ?? '', MAX_USER_MESSAGE), isMidTurn, calls }
+}
+
 /** The directory most of those files sit in: where to look for the project's git root. */
 export function projectDirGuess(files: readonly string[]): string | undefined {
   const counts = new Map<string, number>()
@@ -181,6 +217,15 @@ function factLines(facts: DiskFacts): string[] {
   if (facts.handoff !== undefined) out.push(`- newest handoff: ${facts.handoff}`)
   if (facts.recentFiles.length > 0) out.push(`- files this session read or edited, newest first:\n${facts.recentFiles.map(f => `  ${f}`).join('\n')}`)
   out.push(`- checkpoints for this project (${facts.checkpointDir}), newest first: ${facts.listing.slice(0, 10).join(', ') || '(none)'}`)
+  if (facts.turn !== undefined) {
+    const t = facts.turn
+    if (t.latestUser !== undefined) out.push(`- the user's latest message, verbatim: "${t.latestUser}"`)
+    out.push(
+      t.isMidTurn
+        ? `- Claude Code compacted in the middle of the reply to that message. Calls made since it: ${t.calls.length === 0 ? 'none' : t.calls.map(c => `${c.tool} ${c.on} (${c.hasReturned ? 'returned' : 'no result yet'})`).join('; ')}.`
+        : '- the assistant had answered that message when Claude Code compacted.',
+    )
+  }
   return out
 }
 
@@ -206,6 +251,16 @@ export function forkPrompt(input: AutoInput): string {
   parts.push(
     `For §7, list only targets that exist: the paths above and files you saw read or written in this conversation, relative to ${input.facts.projectRoot} where they sit inside it. ` +
       'Prefer section targets (`path#Heading`, `path#last N`) to whole files. Never list CLAUDE.md, rules files or memory.',
+  )
+  // Judged 2026-11-05 on fork-written checkpoints: pronouns in 3 of 3, an in-flight call called "not done", an approval's sign-off dropped.
+  parts.push(
+    [
+      'Four things checkpoints written this way have got wrong:',
+      "- Refer to the user by name or as \"they\". Their pronouns are not stated, so never write he, him or his, or she or her.",
+      '- Use the turn facts above as given. A call that returned is done, even when the reply after it was never written; say exactly that, and don\'t call it not done.',
+      "- The next action: when the compaction caught a reply in progress, finish that reply first. After that, take the first unfinished item of the plan, approved work that has not run included. When that waits on the user's answer, say so and name what can run meanwhile.",
+      '- Keep every approval\'s conditions whole, including any further sign-off its recommendation required (for example "deploy after the tests pass, and only on your explicit go").',
+    ].join('\n'),
   )
   return parts.join('\n\n')
 }

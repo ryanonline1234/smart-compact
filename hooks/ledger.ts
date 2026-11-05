@@ -191,7 +191,8 @@ export function nudgeThreshold(suggestAt: number, window: number, autoCompactAt?
 export type Row = {
   role: 'user' | 'assistant'
   text: string
-  toolUses?: readonly { tool: string; input?: Record<string, unknown> }[]
+  /** `text` (or `result`) once the call has returned; both absent while it is in flight. */
+  toolUses?: readonly { tool: string; input?: Record<string, unknown>; text?: string; result?: unknown }[]
 }
 export type PendingAsk = { list?: string; buttons?: string; answer?: string }
 
