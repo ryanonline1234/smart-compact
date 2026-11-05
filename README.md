@@ -56,6 +56,7 @@ Built for sessions that run for days: many rounds of feedback, several compactio
 
 Measured on the same sessions, a pending numbered list is what a reply like "go with recs" answers, so the plugin keeps it:
 
+- **A checkpoint at every compaction Claude Code starts on its own** (at its threshold, precomputed in the background, or a bare `/compact`), at the quality of a manual save. A fork of the session writes it, alongside the summary. The fork is the same model reading the same transcript, with tools denied; its answer goes only to the file, and the session stays the same session. It gets the save skill's rules, the template, your profile, the previous checkpoint, the pending decision, and the facts a save would look up with tools (git state, the state files' next action and open questions, earlier checkpoints). The plugin checks the result like a manual save, with the carry-forward guard and manifest measurement. If a check refuses it, the plugin asks for a corrected version, up to twice, then carries any dropped item verbatim and marks it. A plugin-written checkpoint stands in when no fork can run. In a 3-pair A/B against manual saves, the fork matched the manual save on every rubric line in every pair. A blind judge scored each checkpoint against its own session and rated the fork at least as high on all five dimensions in all three pairs. Option `checkpointOnCompact` (default on).
 - **The pending decision list, captured mechanically.** At every compaction it finds the newest numbered list that asks something (a `?` or a recommendation), or a question asked with buttons, within the last six user messages. It quotes the list verbatim into the compaction instructions, with the user's reply if there is one, so "go with recs" never depends on the summarizer noticing the list.
 
 ### Profile
@@ -107,8 +108,8 @@ In a full end-to-end run, the notice estimated ≈14.3k for rehydrate. The two f
 
 It is a mod: code that runs inside Claude Code with your permissions. `claude plugin validate` lists exactly what it touches:
 
-- **Hooks:** `session.start` (registers its tool), `tool.call` (its own tool), `session.compact` (adds the summary contract and the pending list, and observes the outcome), `classic.SessionStart` and `classic.UserPromptSubmit` (to learn the transcript's path), `turn.complete`.
-- **Calls:** reads files listed in your checkpoint, the previous checkpoint, the profile and the session transcript; reads `HOME` and `SMART_COMPACT_PROFILE`; runs `/compact`; writes transcript notices and a prompt suggestion. No network, no file writes, no processes. Turn the contract off with the `summaryContract` option.
+- **Hooks:** `session.start` (registers its tool), `tool.call` (its own tool), `session.compact` (adds the summary contract and the pending list, writes the checkpoint for a compaction it did not start, and observes the outcome), `classic.SessionStart` and `classic.UserPromptSubmit` (to learn the transcript's path), `turn.complete`.
+- **Calls:** reads files listed in your checkpoint, the previous checkpoint, the profile and the session transcript; reads `HOME` and `SMART_COMPACT_PROFILE`; runs `/compact`; writes transcript notices and a prompt suggestion. At a compaction it did not start, it also runs read-only git commands (`rev-parse`, `status`, `log`, `ls-files`) in the project, sends one fork of the session (and up to two corrections) through the session's own client, and writes the checkpoint under `~/.claude/checkpoints/`. No other network, no other file writes. Turn the contract off with `summaryContract`, the compaction checkpoints with `checkpointOnCompact`.
 
 ## Develop
 
@@ -117,6 +118,7 @@ claude plugin validate .                 # manifest, hooks, calls
 claude plugin test .                     # unit tests
 python3 scripts/e2e.py                   # full save → compact → rehydrate run, about two minutes
 python3 scripts/e2e_long.py              # two saves with carry-forward, one compaction per queue, and an automatic compaction with the contract on and off
+python3 scripts/e2e_long.py --scenario ab --model claude-opus-5-5   # the quality gate: compaction checkpoints vs manual saves, 3 pairs and a blind judge
 python3 scripts/calibrate.py FILE...     # measure chars per token on your own files
 ```
 
@@ -127,7 +129,8 @@ Load the working copy into a session with `claude --plugin-dir .`.
 - CJK text is unmeasured; the estimate assumes one character per token.
 - Detecting re-attached files reads Claude Code's transcript format, which can change between releases.
 - The engine's "after" token count leaves out the system prompt and tool definitions, so the notice says so instead of inventing a total.
-- If Claude Code auto-compacts before you save, there is no checkpoint to rehydrate from; the summary contract is the floor, not a checkpoint.
+- A checkpoint written at Claude Code's own compaction cannot update the project's state files or rules doc, as a manual save does first; it lists those updates as to-dos.
+- Precomputed compactions (the summary built in the background) are covered by unit tests only: `claude -p` did not precompute in testing.
 - The carry-forward guard matches items by shared words. It can flag a rule that was reworded heavily; carrying it verbatim or retiring it by name always satisfies it.
 
 ## License

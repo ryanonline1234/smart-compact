@@ -1,6 +1,6 @@
 # 02 — Checkpoints at Claude Code's own compactions
 
-_Status, 2026-11-04: approved, building. autoSave "boundary" is retired (0.3.2). Ryan, on "Build option 2 with the recs?": "go ahead and retire autosave" … "yeah update the local skill if the current one is worse", so the recs stand and the quality gate decides whether it goes live._
+_Status, 2026-11-04: BUILT as 0.4.0 and live in the author's setup, after the quality gate passed (DECISIONS.md, 2026-11-04 0.4.0). autoSave "boundary" is retired (0.3.2). Ryan, on "Build option 2 with the recs?": "go ahead and retire autosave" … "yeah update the local skill if the current one is worse"._
 
 ## Why
 
