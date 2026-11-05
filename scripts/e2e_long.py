@@ -182,9 +182,11 @@ def write_fixture(root: Path) -> Path:
 
 
 def checkpoint_dirs(fix: Path) -> list[Path]:
-    """Folders keyed by this fixture: git may report /var/... where Python resolves /private/var/...."""
-    tail = re.sub(r"[^A-Za-z0-9]", "-", f"{fix.parent.name}/{fix.name}")
-    return [d for d in (Path.home() / ".claude" / "checkpoints").glob(f"*{tail}") if d.is_dir()]
+    """This fixture's own checkpoint folders, by exact slug: git may report /private/var/... where Python says /var/....
+    (Matching by a name suffix let two concurrent A/B runs read and delete each other's checkpoints, 2026-11-05.)"""
+    slugs = {re.sub(r"[^A-Za-z0-9]", "-", str(p)) for p in (fix, fix.resolve())}
+    base = Path.home() / ".claude" / "checkpoints"
+    return [base / name for name in slugs if (base / name).is_dir()]
 
 
 def checkpoints_for(fix: Path) -> list[Path]:
@@ -495,7 +497,8 @@ def run_ab_arm(claude: str, model: str, root: Path, arm: str, out: dict) -> None
                 status = "fork checkpoint" if done else "engine compacted, no checkpoint notice"
             break
         reqs = requests(read_log(log))
-        if arm == "manual" and reqs and reqs[-1]["context"] >= 88_000:
+        # 75k: a save turn can cost 30k with its checks and corrections, and the point is about 117k.
+        if arm == "manual" and reqs and reqs[-1]["context"] >= 75_000:
             s.mark("second save")
             s.turn("/smart-compact:save")
             s.wait(notice("compacted"), 300)
@@ -505,7 +508,12 @@ def run_ab_arm(claude: str, model: str, root: Path, arm: str, out: dict) -> None
     s.close()
     cps = checkpoints_for(fix)
     texts = [c.read_text() for c in cps]
+    triggers = [(r.get("compact_metadata") or {}).get("trigger") for r in read_log(log) if r.get("subtype") == "compact_boundary"]
+    if arm == "manual" and "auto" in triggers:
+        status, texts = "invalid: Claude Code compacted during the manual arm", []
+    saving = [r["context"] for r in requests(read_log(log)) if r["label"] == "second save"]
     out[arm] = {
+        "save_turn_tokens": (saving[-1] - saving[0]) if len(saving) >= 2 else None,
         "status": status,
         "checkpoints": [c.name for c in cps],
         "questions": questions,

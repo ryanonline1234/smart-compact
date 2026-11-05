@@ -39,7 +39,7 @@ Inside a session, `/plugin marketplace add ryanonline1234/smart-compact`, then `
 | Command | What it does |
 |---|---|
 | `/smart-compact:save [budget]` | Writes a checkpoint, then compacts when the turn ends. `budget` caps what a later rehydrate re-reads; the default is `150k`. |
-| `/smart-compact:rehydrate [path] [budget]` | Reads the checkpoint and its manifest, skipping anything already in context, and reports what it re-read, what it skipped, and why. Only you can start it. |
+| `/smart-compact:rehydrate [path] [budget]` | Reads the checkpoint and its manifest, skipping anything already in context, and reports what it re-read, what it skipped, and why. You start it, or the plugin does after a compaction when you turn on `autoRehydrate`. |
 
 Checkpoints are plain markdown in `~/.claude/checkpoints/<project-slug>/`, keyed by the project's git root rather than the shell's directory. The newest ten are kept; older ones move to `archive/`.
 
@@ -73,17 +73,27 @@ Measured on the same sessions, a pending numbered list is what a reply like "go 
 - Manifest defaults: STATE.md#Next action, STATE.md#Open questions, DECISIONS.md#last 3.
 ```
 
-## The save suggestion
+## Settings
 
-When context passes a size you choose, the plugin suggests `/smart-compact:save` once: a transcript line, plus a Tab suggestion in the terminal. It never saves on its own. The default threshold is 60% of the point where Claude Code compacts on its own, read from the session; a `suggestAt` in tokens can only bring it earlier, and `-1` turns it off. Set it in `/config`, with `/plugin configure smart-compact@smart-compact`, or in settings:
+Set them in `/config`, with `/plugin configure smart-compact@smart-compact`, or in settings:
 
 ```json
 {
   "pluginConfigs": {
-    "smart-compact@smart-compact": { "options": { "suggestAt": 400000 } }
+    "smart-compact@smart-compact": { "options": { "suggestFrom": 600000, "suggestTo": 700000, "autoRehydrate": "after-save" } }
   }
 }
 ```
+
+| Option | Default | What it does |
+|---|---|---|
+| `suggestAt` | `0` | Offer `/smart-compact:save` once context passes this many tokens. `0` means 60% of the point where Claude Code compacts on its own; a number can only bring it earlier; `-1` turns the offer off. Ignored when a band is set. |
+| `suggestFrom`, `suggestTo` | `0` | A band instead of a single point. Inside it, the offer comes at the first turn end after a commit, merge, deploy or state-file write, where saving is cheapest, and at the band's top otherwise, so the point varies with each session's work. The band always stays below 90% of the point where Claude Code compacts on its own. |
+| `autoRehydrate` | `off` | `after-save`: once a save's compaction finishes, the plugin runs `/smart-compact:rehydrate auto`, which asks nothing and starts no work. `always`: also after Claude Code's own compactions, once their checkpoint is written. When Claude Code compacts on your next message, that message is answered from the summary first. |
+| `checkpointOnCompact` | `true` | Write a checkpoint at every compaction the plugin did not start (see above). |
+| `summaryContract` | `true` | Add the summary contract and the pending list to every compaction. |
+
+**The offer comes from Claude.** The plugin hands a one-line note to the model with your next message, so its reply ends by offering the save. A transcript line and, in the terminal, a Tab suggestion come with it. The plugin never saves on its own. In a test session, right after a commit inside the band, Claude answered "What is 2 + 2?" with: "2 + 2 = 4. A round just closed with that commit, so `/smart-compact:save` is cheap now if you want to checkpoint and compact this session."
 
 ## How the estimate is measured
 
