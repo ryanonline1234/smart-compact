@@ -59,6 +59,7 @@ h2 { font-size: clamp(1.5rem, 3vw, 2.25rem); line-height: .95; }
 /* top bar */
 .bar { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 18px var(--margin); z-index: 5; }
 .bar nav { display: flex; gap: 24px; }
+@media (max-width: 600px) { .bar nav .wide-only { display: none; } }
 
 /* hero */
 .hero { min-height: 100vh; min-height: 100svh; display: grid; grid-template-columns: minmax(0, 1fr); align-content: end; gap: 28px; padding-bottom: 72px; padding-top: 96px; position: relative; }
@@ -151,16 +152,16 @@ footer { padding: 40px var(--margin) 56px; display: flex; flex-wrap: wrap; justi
 <body>
 <header class="bar">
   <span class="kicker">smart-compact</span>
-  <nav class="kicker"><a href="#install">Install</a><a href="https://github.com/ryanonline1234/smart-compact">GitHub</a></nav>
+  <nav class="kicker"><a class="wide-only" href="#keeps">What it keeps</a><a class="wide-only" href="#prior">Prior art</a><a href="#install">Install</a><a href="https://github.com/ryanonline1234/smart-compact">GitHub</a></nav>
 </header>
 
 <main>
 <section class="hero wrap" data-scene="hero" data-ground="a">
-  <div class="kicker">A Claude Code plugin · v0.1.0</div>
+  <div class="kicker">A Claude Code plugin · v0.5.0</div>
   <h1 data-motion="hero-claim">Compact without forgetting.</h1>
-  <p class="lede">Checkpoint the session to disk, let it compact automatically, and rehydrate only when you choose, with the cost of rehydrating measured on disk before anything is wiped.</p>
+  <p class="lede">Compaction keeps one summary. smart-compact makes sure your standing rules and open decisions are in it, checks each checkpoint against the last, and measures what rehydrating would cost before anything is wiped.</p>
   <div class="cmd"><code>claude plugin marketplace add ryanonline1234/smart-compact</code><button type="button" data-copy="claude plugin marketplace add ryanonline1234/smart-compact">Copy</button></div>
-  <div class="ruler" aria-hidden="true">prose <b>2.73</b> chars/token<br>code <b>2.49</b> chars/token<br>7-file error <b>+0.5%</b></div>
+  <div class="ruler" aria-hidden="true">markdown <b>2.73</b> chars/token<br>code <b>2.49</b> chars/token<br>per file within <b>12%</b></div>
 </section>
 
 <section class="stage" data-scene="stage" data-ground="a" aria-label="How it works, in four steps">
@@ -191,6 +192,21 @@ footer { padding: 40px var(--margin) 56px; display: flex; flex-wrap: wrap; justi
 </section>
 
 <div data-scene="evidence">
+<section class="section" id="keeps" data-ground="b">
+  <div class="head">
+    <div class="kicker">What survives</div>
+    <h2>Rules and open decisions, checked.</h2>
+    <p>Over the author's 229 sessions, what compaction lost was standing rules and the numbered decision lists a later "go with recs" answers, mostly at compactions Claude Code started on its own. So the plugin works on every compaction, not just the ones you start.</p>
+  </div>
+  <dl class="rows">
+    <dt>Every compaction</dt><dd>A summary contract rides on each one, Claude Code's own included: standing rules, open decisions with their recommendations verbatim, approvals with their conditions. In a forced automatic compaction it kept all three open questions in 3 of 3 runs; without it, none, in 3 of 3.</dd>
+    <dt>The pending list</dt><dd>The newest numbered list that asks something is captured mechanically and quoted into the compaction instructions word for word, so "go with recs" still points at it.</dd>
+    <dt>Carry-forward guard</dt><dd>A new checkpoint that silently drops a rule or open decision the previous one held is refused, and an answered question must quote what you said.</dd>
+    <dt>Compactions you didn't start</dt><dd>A fork of the session, the same model reading the same transcript with tools denied, writes the checkpoint beside the summary. The plugin checks and corrects it like a save.</dd>
+  </dl>
+  <div class="caption">Kept is not followed: a rule can survive in the summary and still be broken (ARCBench, arXiv 2611.03223). These are one person's sessions and a few runs per arm; the README says how each was measured.</div>
+</section>
+
 <section class="section" data-ground="a">
   <div class="head">
     <div class="kicker">After compaction</div>
@@ -210,7 +226,7 @@ Send /smart-compact:rehydrate to rebuild context from it, or keep working from t
   <div class="head">
     <div class="kicker">Measured, not assumed</div>
     <h2>Every token count is calibrated.</h2>
-    <p>Seven files, each read in a turn of its own on a real model; the cost is the context growth across the read. Sonnet 5.5 and Opus 5.5 counted identically. The usual rules of thumb, 4 and 3.2 characters per token, undercount by 1.3 to 1.5 times.</p>
+    <p>Seven files, each read in a turn of its own on a real model; the cost is the context growth across the read, line numbers included. Sonnet 5.5 and Opus 5.5 counted identically. These are Read-tool figures, not general prose, which runs nearer 3.6. Against Claude Code's own estimate of 3 bytes per token, they run about 10% lower for markdown and 20% lower for code.</p>
   </div>
   <table class="ledger" data-motion="ledger-table">
     <thead><tr><th>File</th><th class="wide">Characters</th><th>Real tokens</th><th>Estimate</th><th>Error</th></tr></thead>
@@ -226,17 +242,46 @@ Send /smart-compact:rehydrate to rebuild context from it, or keep working from t
     <tfoot><tr><td>All seven</td><td class="wide">101,151</td><td>42,375</td><td>42,598</td><td>+0.5%</td></tr></tfoot>
   </table>
   <div class="ratios">
-    <div><b>2.73</b><span>characters per token, prose</span></div>
+    <div><b>2.73</b><span>characters per token, markdown</span></div>
     <div><b>2.49</b><span>characters per token, code</span></div>
     <div><b>±12%</b><span>worst single file</span></div>
   </div>
+  <div class="caption">The +0.5% for all seven is errors cancelling out; per file the estimate is within 12%.</div>
 </section>
 
-<section class="section" id="install" data-ground="a">
+<section class="section" id="prior" data-ground="a">
+  <div class="head">
+    <div class="kicker">Prior art · surveyed 5 November 2026</div>
+    <h2>What's new, and what isn't.</h2>
+    <p>A survey of Claude Code, its mods and plugins, 14 other coding agents, agent-memory frameworks and 2026 papers. Not found means not in that survey.</p>
+  </div>
+  <div class="two">
+    <div>
+      <div class="kicker" style="margin-bottom:12px">Not new, and credited</div>
+      <dl class="rows">
+        <dt>Injected instructions</dt><dd>Other mods add them to automatic compactions too (bindwright compact-handoff, handoff-compact), as do Codex's compact_prompt and the Claude API.</dd>
+        <dt>Checkpoints</dt><dd>Saving before compaction: compact-plus, Token Optimizer, and MemGPT in 2023.</dd>
+        <dt>Forks</dt><dd>Forking the session at compaction: bindwright's shadow mode and Anthropic's background compaction. The fork itself is Claude Code's own.</dd>
+      </dl>
+    </div>
+    <div>
+      <div class="kicker" style="margin-bottom:12px">Not found elsewhere</div>
+      <dl class="rows">
+        <dt>The guard</dt><dd>Refusing a checkpoint that drops what the previous one held.</dd>
+        <dt>The pending list</dt><dd>Captured mechanically into the compaction instructions.</dd>
+        <dt>Checked forks</dt><dd>A fork-written checkpoint corrected like a save, the stock summary kept.</dd>
+        <dt>Measured rehydrate</dt><dd>Skipping the files Claude Code already put back.</dd>
+      </dl>
+    </div>
+  </div>
+  <div class="caption">The full survey, with sources and confidence: <a href="https://github.com/ryanonline1234/smart-compact/blob/main/docs/03-novelty-assessment.md">docs/03-novelty-assessment.md</a>.</div>
+</section>
+
+<section class="section" id="install" data-ground="b">
   <div class="head">
     <div class="kicker">Install</div>
     <h2>Two commands.</h2>
-    <p>Requires Claude Code 2.1.309 or later with mods enabled, the default from 2.1.287. Tested end to end on 2.1.310 in the mode the desktop app runs sessions in. Set <code>suggestAt</code> in <code>/config</code>.</p>
+    <p>Requires Claude Code 2.1.309 or later with mods enabled, the default from 2.1.287. Tested end to end on 2.1.310 in the mode the desktop app runs sessions in. Settings are in <code>/config</code>.</p>
   </div>
   <div class="stack-cmds">
     <div class="cmd" data-motion="install-command"><code>claude plugin marketplace add ryanonline1234/smart-compact</code><button type="button" data-copy="claude plugin marketplace add ryanonline1234/smart-compact">Copy</button></div>
@@ -247,17 +292,19 @@ Send /smart-compact:rehydrate to rebuild context from it, or keep working from t
       <div class="kicker" style="margin-bottom:12px">Commands</div>
       <dl class="rows">
         <dt>/smart-compact:save [budget]</dt><dd>Checkpoint, then compact when the turn ends. The budget caps a later rehydrate; default 150k.</dd>
-        <dt>/smart-compact:rehydrate [path] [budget]</dt><dd>Re-read the checkpoint and its manifest, skipping what is already in context. Only you can start it.</dd>
-        <dt>suggestAt</dt><dd>Context size, in tokens, at which the plugin suggests saving once. 0 means 60% of the window; −1 turns it off.</dd>
+        <dt>/smart-compact:rehydrate [path] [budget]</dt><dd>Re-read the checkpoint and its manifest, skipping what is already in context. You start it, or the plugin does with autoRehydrate.</dd>
+        <dt>suggestFrom · suggestTo</dt><dd>A token band. Inside it, Claude offers the save right after a commit or a state-file write, and at the band's top otherwise.</dd>
+        <dt>autoRehydrate</dt><dd>off, after-save, or always: rehydrate on its own after a compaction, asking nothing.</dd>
       </dl>
     </div>
     <div>
       <div class="kicker" style="margin-bottom:12px">What its code can touch</div>
       <dl class="rows">
-        <dt>Reads</dt><dd>files your checkpoint lists, the session transcript, HOME</dd>
-        <dt>Runs</dt><dd>/compact, once per save</dd>
-        <dt>Writes</dt><dd>transcript notices and a prompt suggestion</dd>
-        <dt>Never</dt><dd>network, file writes, processes</dd>
+        <dt>Reads</dt><dd>files your checkpoint lists, the profile, the session transcript, HOME</dd>
+        <dt>Runs</dt><dd>/compact once per save; /smart-compact:rehydrate with autoRehydrate; read-only git at a compaction you didn't start</dd>
+        <dt>Asks the model</dt><dd>one fork of your session per compaction it didn't start, through your own client</dd>
+        <dt>Writes</dt><dd>checkpoints under ~/.claude/checkpoints, transcript notices, a prompt suggestion</dd>
+        <dt>Never</dt><dd>other network calls, other file writes</dd>
       </dl>
     </div>
   </div>
