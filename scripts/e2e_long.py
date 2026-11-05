@@ -435,43 +435,78 @@ def run_ab_arm(claude: str, model: str, root: Path, arm: str, out: dict) -> None
 
 
 
-JUDGE = """Two checkpoints, X and Y, were written at the same point of the same scripted Claude Code session, by two different methods. You are not told which is which, and neither is preferred. A checkpoint must let the session continue after its context is wiped: standing rules, open decisions with recommendations (verbatim), the user's approvals with their conditions, unfinished requests, accurate task state, and a useful list of files to re-read.
+JUDGE = """Below is a Claude Code session's conversation (the user's and the assistant's messages; tool output left out), and a checkpoint written for it at the end. The checkpoint must let the session continue after its context is wiped: standing rules, open decisions with recommendations (verbatim), the user's approvals with their conditions, unfinished requests, accurate task state, the right next action, and a useful list of files to re-read.
 
-What the user said in the session, in order:
-{users}
+=== The conversation, in order ===
+{conversation}
 
-The three questions the assistant asked last, verbatim:
-{questions}
+=== The checkpoint ===
+{checkpoint}
 
-=== Checkpoint X ===
-{x}
+Score the checkpoint from 1 (poor) to 5 (complete and correct) on: rules, decisions, task_state, next_action, manifest. List every factual error: a claim the conversation contradicts, or something the conversation established that the checkpoint gets wrong or leaves out. Answer with only a JSON object: {{"rules": n, "decisions": n, "task_state": n, "next_action": n, "manifest": n, "errors": ["..."], "why": "one sentence"}}"""
 
-=== Checkpoint Y ===
-{y}
-
-For each dimension, say which preserves it better, or tie: rules, decisions, task_state, manifest, overall. List factual errors you find in each (claims the user's messages contradict). Answer with only a JSON object: {{"rules": "X|Y|tie", "decisions": "X|Y|tie", "task_state": "X|Y|tie", "manifest": "X|Y|tie", "overall": "X|Y|tie", "errors_x": ["..."], "errors_y": ["..."], "why": "one sentence"}}"""
+DIMENSIONS = ("rules", "decisions", "task_state", "next_action", "manifest")
 
 
-def judge_pair(claude: str, manual: dict, fork: dict, seed: int) -> dict:
-    """A blind pairwise judgment from a clean headless session (no memory, CLAUDE.md, plugins or tools)."""
-    flip = seed % 2 == 1
-    x, y = (fork, manual) if flip else (manual, fork)
-    users = "\n".join(f"- {u[:600]}" for u in manual.get("user_messages", []) if not u.startswith("<"))
-    prompt = JUDGE.format(users=users, questions="\n".join(manual.get("questions", [])), x=x["final_text"], y=y["final_text"])
+def conversation_of(log: Path) -> str:
+    """Both sides of the conversation, tool calls included (a save's own file edits are part of it), from Claude Code's
+    own transcript (the stream does not echo the user's messages), up to the compaction the checkpoint was written for."""
+    sid = next((r.get("session_id") for r in read_log(log) if r.get("subtype") == "init"), None)
+    found = list((Path.home() / ".claude" / "projects").glob(f"*/{sid}.jsonl")) if sid else []
+    rows = []
+    for line in (found[0].read_text().splitlines() if found else []):
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+    boundaries = [i for i, r in enumerate(rows) if r.get("subtype") == "compact_boundary"]
+    stop = boundaries[-1] if boundaries else len(rows)
+    out = []
+    for r in rows[:stop]:
+        content = r.get("message", {}).get("content") if isinstance(r.get("message"), dict) else None
+        if r.get("isCompactSummary") or r.get("isMeta"):
+            continue
+        if r.get("type") == "user":
+            text = content if isinstance(content, str) else "".join(b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text")
+            if text.strip() and not text.startswith("<") and not text.startswith("Base directory for this skill"):
+                out.append(f"USER: {text.strip()[:1500]}")
+        elif r.get("type") == "assistant":
+            text = "".join(b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text").strip()
+            if text:
+                out.append(f"ASSISTANT: {text[:1500]}")
+            for b in content or []:
+                if isinstance(b, dict) and b.get("type") == "tool_use":
+                    inp = b.get("input") or {}
+                    what = inp.get("file_path") or inp.get("command") or inp.get("query") or inp.get("pattern") or ""
+                    out.append(f"ASSISTANT TOOL CALL: {b.get('name')} {str(what)[:300]}")
+    return "\n\n".join(out)
+
+
+def judge_checkpoint(claude: str, checkpoint: str, log: Path) -> dict:
+    """One checkpoint scored against its own session, by a clean headless session (no memory, CLAUDE.md, plugins or tools), blind to who wrote it."""
+    blind = re.sub(r"^(written_by|compaction):.*\n", "", checkpoint, flags=re.M)
+    prompt = JUDGE.format(conversation=conversation_of(log), checkpoint=blind)
     with tempfile.TemporaryDirectory() as scratch:
         r = subprocess.run([claude, "-p", "--safe-mode", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--model", "claude-opus-5-5", "--output-format", "json"],
                            input=prompt, cwd=scratch, env={**os.environ, **BASE_ENV}, capture_output=True, text=True, timeout=600)
     try:
         text = json.loads(r.stdout).get("result", "")
-        verdict = json.loads(re.search(r"\{[\s\S]*\}", text).group(0))
+        return json.loads(re.search(r"\{[\s\S]*\}", text).group(0))
     except Exception as err:  # noqa: BLE001 — report, don't crash the gate
         return {"error": f"{err}: {r.stdout[:200]} {r.stderr[:200]}"}
-    name = lambda v: {"X": "fork" if flip else "manual", "Y": "manual" if flip else "fork"}.get(v, "tie")
-    out = {k: name(verdict.get(k)) for k in ("rules", "decisions", "task_state", "manifest", "overall")}
-    out["errors_manual"] = verdict.get("errors_y" if flip else "errors_x", [])
-    out["errors_fork"] = verdict.get("errors_x" if flip else "errors_y", [])
-    out["why"] = verdict.get("why", "")
-    return out
+
+
+def judge_pair(claude: str, manual: dict, fork: dict) -> dict:
+    """Each arm judged on its own session; the scores compared. Runs both judgments at once."""
+    got: dict = {}
+    threads = [threading.Thread(target=lambda a=arm, d=data: got.__setitem__(a, judge_checkpoint(claude, d["final_text"], Path(d["log"])))) for arm, data in (("manual", manual), ("fork", fork))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    m, f = got.get("manual", {}), got.get("fork", {})
+    diff = {k: (f.get(k, 0) or 0) - (m.get(k, 0) or 0) for k in DIMENSIONS} if "error" not in m and "error" not in f else None
+    return {"manual": m, "fork": f, "fork_minus_manual": diff}
 
 
 def run_ab(claude: str, model: str, root: Path, runs: int) -> dict:
@@ -485,14 +520,14 @@ def run_ab(claude: str, model: str, root: Path, runs: int) -> dict:
             t.join()
         a, b = (out.get("manual") or {}).get("grade"), (out.get("fork") or {}).get("grade")
         verdict = None if not a or not b else {k: ("pass" if b[k] >= a[k] else "FAIL") for k in a}
-        judged = judge_pair(claude, out["manual"], out["fork"], n) if a and b else None
+        judged = judge_pair(claude, out["manual"], out["fork"]) if a and b else None
         pairs.append({"run": n, "manual": out.get("manual"), "fork": out.get("fork"), "fork_vs_manual": verdict, "judge": judged})
         brief = lambda arm: {k: v for k, v in (out.get(arm) or {}).items() if k not in ("final_text", "user_messages")}
         print(json.dumps({"run": n, "manual": brief("manual"), "fork": brief("fork"), "fork_vs_manual": verdict, "judge": judged}, indent=1), flush=True)
     passed = sum(1 for p in pairs if p["fork_vs_manual"] and all(v == "pass" for v in p["fork_vs_manual"].values()))
-    overall = [p["judge"].get("overall") for p in pairs if p.get("judge") and "overall" in p["judge"]]
+    diffs = [p["judge"]["fork_minus_manual"] for p in pairs if p.get("judge") and p["judge"].get("fork_minus_manual")]
     return {"pairs_passed": f"{passed} of {runs}", "gate": "pass" if passed == runs else "FAIL",
-            "judge_overall": {k: overall.count(k) for k in ("manual", "fork", "tie")}}
+            "judge_fork_minus_manual_sum": {k: sum(d[k] for d in diffs) for k in DIMENSIONS} if diffs else None}
 
 
 def main() -> None:
