@@ -1,6 +1,6 @@
 # State
 
-**Version:** 0.5.0 on local branch `long-horizon`, **committed locally, not pushed**. 0.4.0 (checkpoints at Claude Code's own compactions) plus the manual-save fixes from the blind judge's findings and the settings Ryan asked for: a save band the model offers, and `autoRehydrate`. Public `main` (github.com/ryanonline1234/smart-compact, site smart-compact.vercel.app) is still 0.1.0.
+**Version:** 0.5.1 on local branch `long-horizon`, **committed locally, not pushed**. 0.4.0 (checkpoints at Claude Code's own compactions), plus 0.5.0's manual-save fixes and settings (a save band the model offers, `autoRehydrate`), plus 0.5.1: the fork retuned and re-gated, and the save offer made restart-proof. Public `main` (github.com/ryanonline1234/smart-compact, site smart-compact.vercel.app) is still 0.1.0.
 
 **Installed for the author:** loaded from this working copy via `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`. Options under `pluginConfigs["smart-compact@inline"]`: `suggestFrom: 600000`, `suggestTo: 700000`, `autoRehydrate: "always"`; `checkpointOnCompact` on by default. Backups: `settings.json.pre-smart-compact-0.2.bak`, `.pre-autosave.bak`, `.pre-retire-autosave.bak`, `.pre-0.5-settings.bak`. Profile: `~/.claude/smart-compact/profile.md`. A/B results live in `~/smart-compact-runs/` (outside any worktree).
 
@@ -22,8 +22,18 @@
   - save turn: 11.9k → 12.7k tokens on average.
 - **The fork arm on 0.5.0:** the gate passed 2 of 3 pairs. It failed on "next action includes approved work" in one pair, a line the improved manual save now passes. Blind judge: 60 of 75 for the fork, against 65 for the manual save (67 for the fork in the 0.4.0 gate). The fork's repeated errors were calling the user "he/his" (3/3) and calling an in-flight read not done.
 
+**Verified (2026-11-05, 0.5.1):**
+- **Checks:** 109 unit tests pass, `claude plugin validate` passes, the type check is clean, and a fresh session loads 0.5.1.
+- **The re-gate**, `--scenario ab --runs 5` on Opus 5.5, with criteria fixed before the run:
+  - A: the fork matched or beat the manual save on every rubric line in 5 of 5 pairs (needed 4 of 5).
+  - B: the blind judge, each checkpoint scored against its own session, gave the fork 106 and the manual save 100, out of 125 (needed at least 95).
+  - The fork called the user "he/his" in 1 of 5 runs, down from 3 of 3. The manual save still did in 2 of 5, despite the skill's new line.
+  - Results are in `~/smart-compact-runs/regate`.
+- **The offer survives a restart:** in a test session offered once, then resumed in a new process, 0.5.0 offered again (control) and 0.5.1 did not. The record is in `~/.claude/plugins/store/smart-compact_inline-*.json`.
+- **The offer waits for the user's own prompt:** origin composer, sdk or bridge only. `prompt.submit` was measured to run before the classic hook. The peer case itself is not tested end to end, because `-p` cannot send a peer message.
+
 **Not verified end to end:** a fork-written checkpoint in a real session; the precompute path; `autoRehydrate always` after an engine compaction (unit tests only).
 
-**Next:** watch the first 600k–700k offer and the automatic rehydrates in a real session. Proposed: tune the fork (name the user or say "they"; a call made with its reply still pending is in flight, not "not done"; finish it, then the first unfinished plan item), then re-run `--scenario ab` until the fork matches the manual save again. Later: decide whether to push to the public repo and update the site (it describes 0.1).
+**Next:** watch the first 600k–700k offer and the automatic rehydrates in a real session. A likely cause of restarts: an interactive session hot-reloads its `CLAUDE_CODE_PLUGIN_DIRS` folder, and worktree commits write into `~/smart-compact/.git`. Not measurable in `-p`. A hot reload while a fork writes a checkpoint loses that fork, so moving the live install to a snapshot folder outside the git working copy is proposed. Later: decide whether to push to the public repo and update the site (it describes 0.1).
 
 **Ideas, not started:** measure CJK; measure Fable 5.1's tokenizer; `claude plugin eval` graders for the skill's behavior.

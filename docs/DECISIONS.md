@@ -70,3 +70,12 @@ Append-only. Each entry: the decision, then why.
   - `git worktree remove` deleted the ignored `scripts/out` holding a gate's results; results now go to `SC_OUT`.
   - Concurrent A/B runs matched each other's checkpoint folders by a name suffix; they now match the exact slug.
   - A manual save at 88k crossed the 117k point once save turns grew; it now starts at 75k, and invalid arms are marked.
+
+## 2026-11-05 (0.5.1: the fork retuned and re-gated; the offer made restart-proof)
+
+- **The fork gets where the turn stood as a fact** (the user's latest message verbatim, and the calls since it, returned or not), **and four named corrections**: name the user or say "they"; a returned call is done; finish an interrupted reply, then the first unfinished plan item with approved work included; keep every approval's conditions whole. These target the judge's repeated errors on the 0.5.0 fork (Ryan: "Tune and re-gate").
+- **The gate's criteria were set before the run, and correctness comes first.** The side session's novelty report argued that fork against manual on my own rubric "measures consistency rather than correctness". So: A, the fork matches or beats manual on every rubric line in at least 4 of 5 pairs; B, the blind judge, which scores each checkpoint against its own session, rates the fork's total no more than 5 below manual's. Five pairs instead of three, because judge noise ran about 3 points. Result: A 5/5, B fork 106 against manual 100 of 125. Live on that.
+- **The save offer's state lives in `$.store`, keyed by session id.** In two desktop sessions the offer came twice with no compaction between. The plugin docs say an interactive session hot-reloads its plugin folder, and that a lost hooks worker restarts the module "its timers and state gone". A resumed session reproduced the repeat on 0.5.0 and not on 0.5.1. The record also keeps the latest checkpoint pointer, which a restart used to drop as well.
+- **The note is delivered only with the user's own prompt** (origin composer, sdk or bridge): it once arrived with a cross-session message. Past the band's top, the note says "past the top of".
+- **Coordination with the side session** (local_aca6ee56, novelty report, branches `presentation` and `placement-exp`): disjoint files, its commits held during the gate, its README and docs/03 numbers refreshed from this gate.
+

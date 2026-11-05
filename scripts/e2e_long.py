@@ -513,7 +513,8 @@ def run_ab_arm(claude: str, model: str, root: Path, arm: str, out: dict) -> None
         status, texts = "invalid: Claude Code compacted during the manual arm", []
     saving = [r["context"] for r in requests(read_log(log)) if r["label"] == "second save"]
     out[arm] = {
-        "save_turn_tokens": (saving[-1] - saving[0]) if len(saving) >= 2 else None,
+        # The largest request of the save turn, less its first: its last request comes after the compaction.
+        "save_turn_tokens": (max(saving) - saving[0]) if len(saving) >= 2 else None,
         "status": status,
         "checkpoints": [c.name for c in cps],
         "questions": questions,
