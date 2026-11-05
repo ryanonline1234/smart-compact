@@ -88,6 +88,10 @@ describe('carry-forward between checkpoints', () => {
     const legacy = '## 4. User directives this session\n- Never deploy without asking\n'
     expect(carryForwardGaps(legacy, '## 1. Standing rules\n- none\n').rules).toEqual(['Never deploy without asking'])
   })
+  test('a bold question settled by name counts as carried (seen 2026-11-04: "?**" hid the end of the question)', () => {
+    const item = '**Deploy main with round 5 now?** Rec: yes, but only once you have said yes to it here. Deploying is an outward action, so it waits for your word.'
+    expect(isCarried(item, blocks('- answered: Deploy main with round 5 now? ("Go with recs on 1 and 3"; not run yet)'))).toBe(true)
+  })
   test('matching needs most of the words, not one', () => {
     expect(isCarried('Push means production: ask before any push', ['ask Ryan about the push button colour'])).toBe(false)
   })

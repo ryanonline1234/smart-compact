@@ -35,6 +35,7 @@ from session import Session, find_claude, read_log, requests
 
 REPO = Path(__file__).resolve().parent.parent
 OUT = Path(__file__).parent / "out"
+RUN_TAG = time.strftime("%Y%m%dT%H%M%S")
 MARKER = "SC-CONTRACT-MARKER"
 BASE_ENV = {"CLAUDE_CODE_PLUGIN_DIRS": "/nonexistent"}
 
@@ -331,7 +332,8 @@ def carried(item: str, later: str) -> bool:
     """As the plugin's own check (ledger.ts isCarried): most of the item's words in one block, or a settled line naming its question."""
     bare = re.sub(r"\([^)]*\)", " ", re.sub(r"^\s*\d\.\s*", "", item))
     want = _words(bare)
-    name = _words(re.split(r"(?<=[?.!])\s", bare, maxsplit=1)[0])
+    plain = re.sub(r"[*_`~]", "", bare)  # in "**Deploy now?** Rec" the question ends at "?**"
+    name = _words(re.split(r"(?<=[?.!])\s", plain, maxsplit=1)[0])
     share = lambda a, b: 1.0 if not a else len(a & b) / len(a)
     for block in re.split(r"\n(?=\s*(?:[-*]|\d+\.)\s)", later):
         have = _words(block)
@@ -353,7 +355,7 @@ def grade(p0: str, p1: str, fix: Path, questions: list[str]) -> dict:
         "new_questions_verbatim_of_3": verbatim_lines(questions, s2),
         "new_questions_present_of_3": sum(words_hit(q, s2, 5) for q in questions),
         "approval_with_condition": int(bool(re.search(r"answered[^\n]*(scrape|price pages)", s2, re.I) or re.search(r"scrape[^\n]*price", s2, re.I))),
-        "previous_decisions_carried": sum(carried(q, p1) for q in p0_open),
+        "earlier_items_all_carried": int(all(carried(q, p1) for q in p0_open)),
         "task_state_has_the_edit": int(bool(re.search(r"csv and json|handoff/05", s3, re.I))),
         "manifest_targets_exist": int(len(targets) >= 2 and all(target_exists(t, fix) for t in targets)),
         "links_previous": int(bool(fm("previous")) and fm("previous").endswith(".ckpt.md") and fm("previous") != "none"),
@@ -398,7 +400,8 @@ def run_ab_arm(claude: str, model: str, root: Path, arm: str, out: dict) -> None
             if arm == "manual":
                 status = "invalid: Claude Code compacted before the manual save"
             else:
-                done = s.wait(notice("a checkpoint for it was"), 420)
+                seen = lambda: any(notice("a checkpoint for it was")(r) for r in read_log(log))
+                done = seen() or s.wait(notice("a checkpoint for it was"), 420) is not None or seen()
                 status = "fork checkpoint" if done else "engine compacted, no checkpoint notice"
             break
         reqs = requests(read_log(log))
@@ -416,16 +419,59 @@ def run_ab_arm(claude: str, model: str, root: Path, arm: str, out: dict) -> None
         "status": status,
         "checkpoints": [c.name for c in cps],
         "questions": questions,
+        "earlier_items": len([l for l in section(texts[0], "open decisions").split("\n") if re.match(r"^\s*\d\.", l)]) if texts else None,
         "grade": grade(texts[0], texts[-1], fix, questions) if len(texts) >= 2 else None,
+        "final_text": texts[-1] if texts else "",
+        "user_messages": [r["message"]["content"] for r in read_log(log) if r.get("type") == "user" and isinstance(r.get("message", {}).get("content"), str)],
         "written_by": (re.search(r"^written_by:\s*(.+)$", texts[-1], re.M) or [None, "manual save"])[1] if texts else None,
         "compactions": [(r.get("compact_metadata") or {}).get("trigger") for r in read_log(log) if r.get("subtype") == "compact_boundary"],
         "log": str(log),
     }
-    keep = OUT / "ab-checkpoints" / root.name / arm
+    keep = OUT / "ab-checkpoints" / RUN_TAG / root.name / arm
     keep.mkdir(parents=True, exist_ok=True)
     for c in cps:
         (keep / c.name).write_text(c.read_text())
     cleanup(fix)
+
+
+
+JUDGE = """Two checkpoints, X and Y, were written at the same point of the same scripted Claude Code session, by two different methods. You are not told which is which, and neither is preferred. A checkpoint must let the session continue after its context is wiped: standing rules, open decisions with recommendations (verbatim), the user's approvals with their conditions, unfinished requests, accurate task state, and a useful list of files to re-read.
+
+What the user said in the session, in order:
+{users}
+
+The three questions the assistant asked last, verbatim:
+{questions}
+
+=== Checkpoint X ===
+{x}
+
+=== Checkpoint Y ===
+{y}
+
+For each dimension, say which preserves it better, or tie: rules, decisions, task_state, manifest, overall. List factual errors you find in each (claims the user's messages contradict). Answer with only a JSON object: {{"rules": "X|Y|tie", "decisions": "X|Y|tie", "task_state": "X|Y|tie", "manifest": "X|Y|tie", "overall": "X|Y|tie", "errors_x": ["..."], "errors_y": ["..."], "why": "one sentence"}}"""
+
+
+def judge_pair(claude: str, manual: dict, fork: dict, seed: int) -> dict:
+    """A blind pairwise judgment from a clean headless session (no memory, CLAUDE.md, plugins or tools)."""
+    flip = seed % 2 == 1
+    x, y = (fork, manual) if flip else (manual, fork)
+    users = "\n".join(f"- {u[:600]}" for u in manual.get("user_messages", []) if not u.startswith("<"))
+    prompt = JUDGE.format(users=users, questions="\n".join(manual.get("questions", [])), x=x["final_text"], y=y["final_text"])
+    with tempfile.TemporaryDirectory() as scratch:
+        r = subprocess.run([claude, "-p", "--safe-mode", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--model", "claude-opus-5-5", "--output-format", "json"],
+                           input=prompt, cwd=scratch, env={**os.environ, **BASE_ENV}, capture_output=True, text=True, timeout=600)
+    try:
+        text = json.loads(r.stdout).get("result", "")
+        verdict = json.loads(re.search(r"\{[\s\S]*\}", text).group(0))
+    except Exception as err:  # noqa: BLE001 — report, don't crash the gate
+        return {"error": f"{err}: {r.stdout[:200]} {r.stderr[:200]}"}
+    name = lambda v: {"X": "fork" if flip else "manual", "Y": "manual" if flip else "fork"}.get(v, "tie")
+    out = {k: name(verdict.get(k)) for k in ("rules", "decisions", "task_state", "manifest", "overall")}
+    out["errors_manual"] = verdict.get("errors_y" if flip else "errors_x", [])
+    out["errors_fork"] = verdict.get("errors_x" if flip else "errors_y", [])
+    out["why"] = verdict.get("why", "")
+    return out
 
 
 def run_ab(claude: str, model: str, root: Path, runs: int) -> dict:
@@ -439,10 +485,14 @@ def run_ab(claude: str, model: str, root: Path, runs: int) -> dict:
             t.join()
         a, b = (out.get("manual") or {}).get("grade"), (out.get("fork") or {}).get("grade")
         verdict = None if not a or not b else {k: ("pass" if b[k] >= a[k] else "FAIL") for k in a}
-        pairs.append({"run": n, "manual": out.get("manual"), "fork": out.get("fork"), "fork_vs_manual": verdict})
-        print(json.dumps(pairs[-1], indent=1), flush=True)
+        judged = judge_pair(claude, out["manual"], out["fork"], n) if a and b else None
+        pairs.append({"run": n, "manual": out.get("manual"), "fork": out.get("fork"), "fork_vs_manual": verdict, "judge": judged})
+        brief = lambda arm: {k: v for k, v in (out.get(arm) or {}).items() if k not in ("final_text", "user_messages")}
+        print(json.dumps({"run": n, "manual": brief("manual"), "fork": brief("fork"), "fork_vs_manual": verdict, "judge": judged}, indent=1), flush=True)
     passed = sum(1 for p in pairs if p["fork_vs_manual"] and all(v == "pass" for v in p["fork_vs_manual"].values()))
-    return {"pairs_passed": f"{passed} of {runs}", "gate": "pass" if passed == runs else "FAIL"}
+    overall = [p["judge"].get("overall") for p in pairs if p.get("judge") and "overall" in p["judge"]]
+    return {"pairs_passed": f"{passed} of {runs}", "gate": "pass" if passed == runs else "FAIL",
+            "judge_overall": {k: overall.count(k) for k in ("manual", "fork", "tie")}}
 
 
 def main() -> None:

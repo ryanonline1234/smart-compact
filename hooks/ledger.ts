@@ -111,7 +111,9 @@ export function isCarried(item: string, later: readonly string[]): boolean {
   const bare = item.replace(/\([^)]*\)/g, ' ')
   const want = words(bare).size > 0 ? words(bare) : words(item)
   if (want.size === 0) return true
-  const name = words(bare.split(/(?<=[?.!])\s/)[0] ?? bare)
+  // Markdown first: in "**Deploy now?** Rec: yes" the question ends at "?**", not "? ".
+  const plain = bare.replace(/[*_`~]/g, '')
+  const name = words(plain.split(/(?<=[?.!])\s/)[0] ?? plain)
   return later.some(candidate => {
     const have = words(candidate)
     return share(want, have) >= 0.6 || (isSettled(candidate) && share(name, have) >= 0.6)
