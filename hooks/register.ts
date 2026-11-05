@@ -23,6 +23,8 @@ export const TOOL = 'compact_after_turn'
 export const TOOL_ID = `mcp__${PLUGIN}__${TOOL}`
 const MAX_INSTRUCTIONS = 4000
 const COMPACT_DELAY_MS = 100
+/** Main turns a handed-over /compact may wait before it counts as dropped and stops blocking saves. */
+const MAX_TURNS_WAITING = 3
 
 export type Pending = { instructions: string; checkpoint: string }
 /** A queued compaction, with the manifest as measured before anything was wiped. */
@@ -88,8 +90,11 @@ export function carryForwardDeny(previous: string, gaps: { rules: string[]; deci
 }
 
 /** Pure: what the queue tool tells the model, with the estimate measured at save. */
-export function queuedReport(estimate: Estimate | undefined): string {
-  const lines = ['Queued. Claude Code compacts this conversation as soon as this turn ends, with these instructions.']
+export function queuedReport(
+  estimate: Estimate | undefined,
+  lead = 'Queued. Claude Code compacts this conversation as soon as this turn ends, with these instructions.',
+): string {
+  const lines = [lead]
   if (estimate !== undefined) {
     lines.push(`Measured: ${estimateLine(estimate)} Quote this in the SAVE report.`)
     if (estimate.missingTargets.length > 0) {
@@ -106,10 +111,26 @@ export function queuedReport(estimate: Estimate | undefined): string {
   return lines.join(' ')
 }
 
+/** Pure: the lead when a compaction queued in an earlier turn has not run yet; a second one would compact its summary again. */
+export function alreadyQueuedLead(waiting: string, checkpoint: string): string {
+  return waiting === checkpoint
+    ? 'Already queued: a compaction with this checkpoint, queued in an earlier turn, has not run yet; it runs when this turn ends. ' +
+        'Nothing more was queued and no second call is needed. Say so in the SAVE report.'
+    : `Already queued: a compaction queued in an earlier turn (checkpoint ${waiting}) has not run yet; it runs when this turn ends ` +
+        'and now carries this checkpoint instead. Nothing more was queued. Say so in the SAVE report.'
+}
+
 export const register: Register = (on, options) => {
   // Module state: a reload between the call and the turn's end drops it, and
   // the person then sees no `smart-compact:` line, only the SAVE report.
   let pending: Queued | undefined
+  // The /compact this mod handed to the engine and has not seen finish, and what the engine made of it.
+  let expecting: Queued | undefined
+  let outcome: { skip?: string; tokensBefore?: number; tokensAfter?: number } | undefined
+  /** A newer checkpoint saved while `expecting` waited: that compaction carries it, instead of a second one running. */
+  let superseding: Queued | undefined
+  /** Main turns that ended while `expecting` waited. */
+  let turnsWaiting = 0
 
   // Suggest /smart-compact:save once context passes `suggestAt` tokens (0: 60% of
   // the window; -1: never), once per stretch between compactions.
@@ -179,6 +200,7 @@ export const register: Register = (on, options) => {
     if (!exists) {
       return { deny: `No file at ${request.checkpoint}: write the checkpoint before queuing the compaction.` }
     }
+    let queued: Queued
     // Measured now, before anything is wiped: each Read target's size on disk.
     try {
       const saved = await $.fs.read(request.checkpoint)
@@ -215,27 +237,41 @@ export const register: Register = (on, options) => {
         }
       }
       const checkpointTokens = tokensOf(request.checkpoint, saved.length, saved.split('\n').length, saved)
-      pending = { ...request, estimate: estimateOf(manifest, measured, checkpointTokens), manifest, measured, checkpointTokens }
+      queued = { ...request, estimate: estimateOf(manifest, measured, checkpointTokens), manifest, measured, checkpointTokens }
       const created = saved.match(/^created:\s*(\S+)/m)?.[1]
       lastCheckpoint = { path: request.checkpoint, savedAt: created ?? new Date().toISOString() }
     } catch {
-      pending = { ...request } // unreadable checkpoint or manifest: compact without the estimate
+      queued = { ...request } // unreadable checkpoint or manifest: compact without the estimate
       lastCheckpoint = { path: request.checkpoint, savedAt: new Date().toISOString() }
     }
-    return { result: queuedReport(pending.estimate) }
+    // One /compact at a time. A save while an earlier one waits to run would compact the fresh summary again
+    // (seen 2026-11-04: a /smart-compact:save typed during an automatic save ran right after it).
+    if (expecting !== undefined) {
+      if (queued.checkpoint !== expecting.checkpoint) superseding = queued
+      return { result: queuedReport(queued.estimate, alreadyQueuedLead(expecting.checkpoint, queued.checkpoint)) }
+    }
+    pending = queued
+    return { result: queuedReport(queued.estimate) }
   }).catch(($, e, next) =>
     next.called ? next(e) : { deny: `${PLUGIN}: its handler failed, so nothing was queued. Fall back to the manual /compact line.` },
   )
-
-  // The compaction this mod queued, and what the engine made of it.
-  let expecting: Pending | undefined
-  let outcome: { skip?: string; tokensBefore?: number; tokensAfter?: number } | undefined
 
   // Every compaction of the main conversation, automatic and precomputed ones
   // included, carries the summary contract and the latest checkpoint's pointer.
   // Then it records whether the /compact this mod ran stood or was vetoed.
   on('session.compact', async ($, e, next) => {
     let event = e
+    if (
+      superseding !== undefined &&
+      expecting !== undefined &&
+      e.agentId === undefined &&
+      e.trigger === 'manual' &&
+      (e.instructions ?? '').includes(expecting.checkpoint)
+    ) {
+      expecting = superseding
+      superseding = undefined
+      event = { ...e, instructions: compactArgs(expecting) }
+    }
     if (isContractOn && e.agentId === undefined) {
       const ask = pendingAsk(e.messages as unknown as readonly Row[])
       let profile: string | undefined
@@ -245,7 +281,7 @@ export const register: Register = (on, options) => {
         profile = undefined // no profile: the default contract
       }
       const pointer = lastCheckpoint === undefined ? undefined : pointerLine(lastCheckpoint.path, lastCheckpoint.savedAt)
-      event = { ...e, instructions: withContract(e.instructions, contractFrom(profile), pointer, ask === undefined ? undefined : askInstruction(ask)) }
+      event = { ...event, instructions: withContract(event.instructions, contractFrom(profile), pointer, ask === undefined ? undefined : askInstruction(ask)) }
     }
     const result = await next(event)
     if (e.agentId === undefined && e.trigger !== 'precompute' && result.skip === undefined) {
@@ -297,6 +333,15 @@ export const register: Register = (on, options) => {
     const answered = await next(e)
     if (e.agentId !== undefined) return answered
     if (pending === undefined) {
+      if (expecting !== undefined) {
+        // A compaction is already on its way: a save or a suggestion now would only lead to a second one.
+        // Unless it is lost: a /compact the engine never ran must not block saves for the rest of the session.
+        turnsWaiting += 1
+        if (turnsWaiting < MAX_TURNS_WAITING) return answered
+        $.ui.log(`smart-compact: the queued /compact has not run after ${turnsWaiting} turns, so it counts as dropped. To compact now, paste: ${fallbackLine(expecting)}`)
+        expecting = undefined
+        superseding = undefined
+      }
       if (autoSave === 'off' || e.reason !== 'answer') return answered
       try {
         const { context } = await $.session.usage()
@@ -357,17 +402,25 @@ export const register: Register = (on, options) => {
     // timer: the turn waits on this hook, and a command run from inside it is
     // refused. $.command.run queues /compact until the session is idle.
     $.clock.after(COMPACT_DELAY_MS, () => {
+      if (expecting !== undefined) {
+        // One /compact at a time: the one already waiting carries this checkpoint instead.
+        if (request.checkpoint !== expecting.checkpoint) superseding = request
+        return
+      }
       expecting = request
+      turnsWaiting = 0
       outcome = undefined
       $.command.run({ command: 'compact', args: compactArgs(request) }).then(
         async () => {
           const seen = outcome
+          const used = expecting ?? request // a newer save may have taken this compaction over
           expecting = undefined
           outcome = undefined
+          superseding = undefined
           if (seen === undefined) {
-            $.ui.log(`smart-compact: /compact ran but no compaction was seen. Check the transcript; to compact now, paste: ${fallbackLine(request)}`)
+            $.ui.log(`smart-compact: /compact ran but no compaction was seen. Check the transcript; to compact now, paste: ${fallbackLine(used)}`)
           } else if (seen.skip !== undefined) {
-            $.ui.log(`smart-compact: compaction skipped (${seen.skip}). To compact now, paste: ${fallbackLine(request)}`)
+            $.ui.log(`smart-compact: compaction skipped (${seen.skip}). To compact now, paste: ${fallbackLine(used)}`)
           } else {
             // The engine's "after" count leaves out the system prompt and tool
             // definitions (measured 2026-11-03: 28k reported, about 76k in the next
@@ -381,13 +434,13 @@ export const register: Register = (on, options) => {
               back = undefined
             }
             const after =
-              request.manifest === undefined || request.measured === undefined || request.checkpointTokens === undefined
+              used.manifest === undefined || used.measured === undefined || used.checkpointTokens === undefined
                 ? undefined
-                : estimateOf(request.manifest, request.measured, request.checkpointTokens, back, request.checkpoint)
+                : estimateOf(used.manifest, used.measured, used.checkpointTokens, back, used.checkpoint)
             const details = after === undefined ? [] : estimateDetails(after)
             $.ui.log(
               [
-                `${head} Checkpoint: ${request.checkpoint}`,
+                `${head} Checkpoint: ${used.checkpoint}`,
                 ...details,
                 'Send /smart-compact:rehydrate to rebuild context from it, or keep working from the summary.',
               ].join('\n'),
@@ -397,9 +450,11 @@ export const register: Register = (on, options) => {
           }
         },
         (err: unknown) => {
+          const used = expecting ?? request
           expecting = undefined
           outcome = undefined
-          $.ui.log(`smart-compact: compaction failed (${errorText(err)}). To compact now, paste: ${fallbackLine(request)}`)
+          superseding = undefined
+          $.ui.log(`smart-compact: compaction failed (${errorText(err)}). To compact now, paste: ${fallbackLine(used)}`)
         },
       )
     })

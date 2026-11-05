@@ -34,3 +34,11 @@ Append-only. Each entry: the decision, then why.
 - **"Near" is min(85% of the auto point, the point minus 25k).** The save turn cost about 12k tokens in the forced run (103k → 115k against a 117k point); a fixed share leaves too little on small windows.
 - **The auto-compaction point is read at the first turn's end and every 10th turn,** not once past 20% of the model window. Bug found end to end: a 150k session on a 1M model never asked, and fell back to 85% of 1M.
 - **The `auto` save abandons itself if the user writes during it.** Otherwise the save turn would absorb a reply like "go with recs" and the session would then idle on a compaction.
+
+## 2026-11-04 (0.3.1: one compaction at a time)
+
+- **The queue tool answers "Already queued" while a `/compact` it handed over has not run, rather than queuing a second.** Seen in the first real automatic save (a Buildable session): a `/smart-compact:save` typed during it ran between its turn end and its `/compact`, because a slash command waits for the turn to end and the plugin hands `/compact` over 100 ms later, to run when the session is idle. That save reused the checkpoint and queued again, and both ran, the second over a 40k summary. Reproduced end to end: two compactions, the second 23.7k → 26.8k. A refusal (deny) was rejected: the second save did nothing wrong, and a refusal reads as something to fix.
+- **A newer checkpoint rides on the waiting compaction,** its instructions swapped in `session.compact`: the waiting `/compact` cannot be cancelled, and its pointer would name the older checkpoint.
+- **No automatic save or suggestion while a compaction waits.** A message typed meanwhile re-arms autoSave, and a save at that turn's end would queue a second compaction.
+- **A waiting `/compact` counts as dropped after 3 main turns.** Whether `$.command.run` settles when the engine drops a queued command is unverified; without a bound, a lost one would block every later save in the session.
+- **The e2e forces the second queue call** instead of sending a second `/smart-compact:save`. Sonnet 5.5 and Opus 5.5 both declined a plain second save in tests (nothing new), so a plain one tests the model, not the plugin. Plain text sent mid-turn joins the running turn, so the call is sent at the save turn's end.

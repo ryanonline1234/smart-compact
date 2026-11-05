@@ -6,6 +6,8 @@ import { ASKING, CHECKPOINT } from './test-fixtures'
 
 const CKPT = '/Users/x/.claude/checkpoints/-Users-x-proj/20261103T120000Z-fix-auth.ckpt.md'
 const INSTRUCTIONS = `The summary must contain, verbatim: "Task: fix auth. CHECKPOINT: ${CKPT}. Rehydrate from it only when the user sends /smart-compact:rehydrate."`
+const CKPT2 = '/Users/x/.claude/checkpoints/-Users-x-proj/20261103T130000Z-fix-auth-later.ckpt.md'
+const INSTRUCTIONS2 = `The summary must contain, verbatim: "Task: fix auth, later. CHECKPOINT: ${CKPT2}. Rehydrate from it only when the user sends /smart-compact:rehydrate."`
 
 function turnEnd(reason: 'answer' | 'aborted' | 'refusal' | 'error', agentId?: string) {
   return { answer: 'saved', durationMs: 10, isAborted: reason === 'aborted', turnId: 't1', reason, agentId } as never
@@ -135,6 +137,55 @@ describe('the queued compaction', () => {
     expect(compactions.length).toBe(1) // consumed: the next turn does not compact again
   })
 
+  test('a save while the first compaction waits answers "already queued" and compacts once', async ($, on) => {
+    const { compactions, commands, clock, runQueued } = engine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.tool.call({ tool: TOOL_ID, instructions: INSTRUCTIONS, checkpoint: CKPT } as never)
+    await $.turn.complete(turnEnd('answer'))
+    await clock.advance(200)
+    expect(commands.length).toBe(1) // handed to the engine, which holds it until the session is idle
+    // A /smart-compact:save typed during the first save runs before that /compact (seen 2026-11-04).
+    const again = await $.tool.call({ tool: TOOL_ID, instructions: INSTRUCTIONS, checkpoint: CKPT } as never)
+    expect(again.deny).toBe(undefined)
+    expect(JSON.stringify(again)).toContain('Already queued: a compaction with this checkpoint')
+    await $.turn.complete(turnEnd('answer'))
+    await clock.advance(200)
+    expect(commands.length).toBe(1)
+    await runQueued($ as never)
+    expect(compactions.length).toBe(1)
+    await $.turn.complete(turnEnd('answer'))
+    await runQueued($ as never)
+    expect(compactions.length).toBe(1)
+  })
+  test('a newer checkpoint saved while the compaction waits rides on it, not on a second one', async ($, on) => {
+    const { compactions, logs, clock, runQueued } = engine(on, undefined, true, 1_000, { ...FILES, [CKPT2]: CHECKPOINT })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.tool.call({ tool: TOOL_ID, instructions: INSTRUCTIONS, checkpoint: CKPT } as never)
+    await $.turn.complete(turnEnd('answer'))
+    await clock.advance(200)
+    const newer = await $.tool.call({ tool: TOOL_ID, instructions: INSTRUCTIONS2, checkpoint: CKPT2 } as never)
+    expect(JSON.stringify(newer)).toContain(`Already queued: a compaction queued in an earlier turn (checkpoint ${CKPT})`)
+    await $.turn.complete(turnEnd('answer'))
+    await runQueued($ as never)
+    expect(compactions.length).toBe(1)
+    expect(compactions[0]?.instructions).toContain(`CHECKPOINT: ${CKPT2}.`)
+    expect(compactions[0]?.instructions).not.toContain(`CHECKPOINT: ${CKPT}.`)
+    expect(logs.join('\n')).toContain(`Checkpoint: ${CKPT2}`)
+  })
+  test('a /compact that never runs stops blocking saves after three turns', async ($, on) => {
+    const { commands, logs, clock } = engine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.tool.call({ tool: TOOL_ID, instructions: INSTRUCTIONS, checkpoint: CKPT } as never)
+    await $.turn.complete(turnEnd('answer'))
+    await clock.advance(200)
+    for (let i = 0; i < 3; i++) await $.turn.complete(turnEnd('answer')) // the engine never runs it
+    expect(logs.join('\n')).toContain('the queued /compact has not run after 3 turns, so it counts as dropped')
+    const later = await $.tool.call({ tool: TOOL_ID, instructions: INSTRUCTIONS, checkpoint: CKPT } as never)
+    expect(JSON.stringify(later)).toContain('Queued. Claude Code compacts')
+    await $.turn.complete(turnEnd('answer'))
+    await clock.advance(200)
+    expect(commands.filter(c => c.command === 'compact').length).toBe(2)
+  })
   test('a subagent ending does not consume it; the main turn does', async ($, on) => {
     const { compactions, runQueued } = engine(on)
     await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
@@ -338,6 +389,17 @@ describe('adaptive: the pending list and the automatic save', () => {
     await clock.advance(200)
     expect(commands).toEqual([{ command: 'smart-compact:save', args: 'auto' }])
     expect(logs.join('\n')).toContain('a commit, merge, deploy or round-closing write just happened')
+  })
+  test('no automatic save while a compaction waits to run', { options: { autoSave: 'boundary' } }, async ($, on) => {
+    const { commands, clock } = engine(on, undefined, true, 870_000, FILES, 1_000_000)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.tool.call({ tool: TOOL_ID, instructions: INSTRUCTIONS, checkpoint: CKPT } as never)
+    await $.turn.complete(turnEnd('answer'))
+    await clock.advance(200)
+    // A message typed meanwhile ends its turn before that /compact runs; saving then would only compact again.
+    await $.turn.complete(turnEnd('answer'))
+    await clock.advance(200)
+    expect(commands.map(c => c.command)).toEqual(['compact'])
   })
   test('the default, suggest, never saves on its own', async ($, on) => {
     const { commands, suggestions, clock } = engine(on, undefined, true, 870_000, FILES, 1_000_000)

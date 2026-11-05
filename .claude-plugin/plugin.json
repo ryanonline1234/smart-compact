@@ -1,6 +1,6 @@
 {
   "name": "smart-compact",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Checkpoint a Claude Code session before compacting, compact it automatically, and rehydrate on your terms with a measured estimate of what comes back.",
   "author": {
     "name": "Ryan Tseng",

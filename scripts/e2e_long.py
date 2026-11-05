@@ -10,9 +10,12 @@
   boundary  autoSave "boundary" with the window forced to 100k: the plugin
          should save on its own at a turn's end before the overflow, and the
          compaction summary should quote the pending list's lines verbatim.
+  double  A second queue call sent while a save is still running (as when the
+         user types /smart-compact:save during an automatic save): the
+         session should compact once, not twice.
 
 Usage:
-    python3 scripts/e2e_long.py [--scenario auto|saves|boundary|all] [--model claude-sonnet-5-5] [--claude PATH]
+    python3 scripts/e2e_long.py [--scenario auto|saves|boundary|double|all] [--model claude-sonnet-5-5] [--claude PATH]
 Costs a few dollars and takes about ten minutes for both. Uses this repo as the
 plugin (--plugin-dir) and hides other plugin folders (CLAUDE_CODE_PLUGIN_DIRS).
 """
@@ -297,9 +300,58 @@ def run_boundary(claude: str, model: str, root: Path) -> dict:
     }
 
 
+# ---------------------------------------------------------------- double
+
+def run_double(claude: str, model: str, root: Path) -> dict:
+    """A save, then a second queue call before its /compact runs: one compaction, not two."""
+    fix = write_fixture(root)
+    log = OUT / f"double-{time.strftime('%Y%m%dT%H%M%S')}.jsonl"
+    extra = ["--plugin-dir", str(REPO), "--permission-mode", "bypassPermissions"]
+    s = Session(claude, Path("/"), model, log, extra, BASE_ENV)
+    s.turn(
+        f"We're working on the project at {fix}. Read the 'Next action' and 'Open questions' sections of {fix}/STATE.md "
+        "(not the whole file). Standing rule from now on: never push without asking me. Then list the open decisions, "
+        "numbered, each with your recommendation. Do not change any files."
+    )
+    s.mark("first save")
+    s.send("/smart-compact:save")
+    # The second queue call lands between the save's turn end and its /compact, as a
+    # /smart-compact:save typed during an automatic save did on 2026-11-04 (a slash command
+    # waits for the turn to end; plain text sent mid-turn joins the running turn instead).
+    # Sent the moment the save turn ends: the plugin hands /compact over 100 ms later.
+    # Asked for outright, since a plain second save is up to the model: Sonnet 5.5 and Opus 5.5
+    # both declined it in tests (nothing new), while Opus 5.5 queued it in the real session.
+    results = 1 if s.wait(lambda e: e.get("type") == "result", 600) else 0
+    s.mark("second queue call, at the save turn's end")
+    s.send(
+        "Call mcp__smart-compact__compact_after_turn again now, with the same instructions and checkpoint as your save "
+        "(load it with ToolSearch if needed). Then reply with only the tool's answer, verbatim."
+    )
+    results += 1 if s.wait(lambda e: e.get("type") == "result", 300) else 0
+    is_done = lambda e: e.get("type") == "system" and e.get("subtype") == "ui_log" and e.get("plugin") == "smart-compact" and "compacted" in e.get("text", "")
+    first = s.wait(is_done, 420)
+    # A second compaction, if the bug is there, follows the first within a minute or so.
+    second = s.wait(is_done, 180) if first else None
+    s.close()
+    rows = read_log(log)
+    boundaries = [(r.get("compact_metadata") or {}) for r in rows if r.get("subtype") == "compact_boundary"]
+    queue = tool_results(rows, "compact_after_turn")
+    result = {
+        "turn_results": results,
+        "compactions": len(boundaries),
+        "boundary_metadata": [{k: v for k, v in b.items() if "token" in k.lower() or k == "trigger"} for b in boundaries],
+        "queue_calls": [("refused" if err else "answered") + ": " + text[:150] for err, text in queue],
+        "compacted_notices": [n["text"].splitlines()[0][:120] for n in (first, second) if n],
+        "checkpoints": [c.name for c in checkpoints_for(fix)],
+        "log": str(log),
+    }
+    cleanup(fix)
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--scenario", choices=["auto", "saves", "boundary", "both", "all"], default="all")
+    parser.add_argument("--scenario", choices=["auto", "saves", "boundary", "double", "both", "all"], default="all")
     parser.add_argument("--model", default="claude-sonnet-5-5")
     parser.add_argument("--claude")
     args = parser.parse_args()
@@ -309,6 +361,8 @@ def main() -> None:
         root = Path(tmp)
         if args.scenario in ("saves", "both", "all"):
             print(json.dumps({"saves": run_saves(claude, args.model, root)}, indent=1), flush=True)
+        if args.scenario in ("double", "all"):
+            print(json.dumps({"double": run_double(claude, args.model, root)}, indent=1), flush=True)
         if args.scenario in ("boundary", "all"):
             print(json.dumps({"boundary": run_boundary(claude, args.model, root)}, indent=1), flush=True)
         if args.scenario in ("auto", "both", "all"):
