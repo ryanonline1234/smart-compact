@@ -350,7 +350,7 @@ describe('long-horizon compactions', () => {
   })
 })
 
-describe('adaptive: the pending list and the automatic save', () => {
+describe('adaptive: the pending list and the save suggestion', () => {
   test('every compaction quotes the newest pending list verbatim, with the reply', async ($, on) => {
     const { compactions } = engine(on)
     await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
@@ -362,46 +362,19 @@ describe('adaptive: the pending list and the automatic save', () => {
     expect(compactions[0]?.instructions).toContain('1. **Deploy main now?** Rec: yes.\n2. Use the supplier API or scrape the price pages?\n   Options: API, scrape. Rec: API.')
     expect(compactions[0]?.instructions).toContain('The user\'s reply, verbatim: "go with recs"')
   })
-  test('boundary mode: near the auto-compaction point it saves on its own, once until re-armed', { options: { autoSave: 'boundary' } }, async ($, on) => {
-    const { commands, logs, clock } = engine(on, undefined, true, 870_000, FILES, 1_000_000)
-    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
-    await $.turn.complete(turnEnd('answer'))
-    expect(commands.length).toBe(0) // not from inside the hook the turn waits on
-    await clock.advance(200)
-    expect(commands).toEqual([{ command: 'smart-compact:save', args: 'auto' }])
-    expect(logs.join('\n')).toContain('87% of where Claude Code compacts on its own (≈1000k). Saving now (autoSave), before a turn crosses it.')
-    await $.turn.complete(turnEnd('answer'))
-    await clock.advance(200)
-    expect(commands.length).toBe(1) // once
-    await $.session.compact({ trigger: 'manual', messages: SUMMARY } as never) // a compaction re-arms it
-    await $.turn.complete(turnEnd('answer'))
-    await clock.advance(200)
-    expect(commands.length).toBe(2)
-  })
-  test('boundary mode: right after a merge it saves at half the point', { options: { autoSave: 'boundary' } }, async ($, on) => {
-    const { commands, logs, clock } = engine(on, undefined, true, 600_000, FILES, 1_000_000)
-    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
-    await $.turn.complete(turnEnd('answer'))
-    await clock.advance(200)
-    expect(commands.length).toBe(0) // 60% and no boundary: only the suggestion
-    await $.tool.call({ tool: 'Bash', command: 'git -C ~/proj merge cost-check' } as never)
-    await $.turn.complete(turnEnd('answer'))
-    await clock.advance(200)
-    expect(commands).toEqual([{ command: 'smart-compact:save', args: 'auto' }])
-    expect(logs.join('\n')).toContain('a commit, merge, deploy or round-closing write just happened')
-  })
-  test('no automatic save while a compaction waits to run', { options: { autoSave: 'boundary' } }, async ($, on) => {
-    const { commands, clock } = engine(on, undefined, true, 870_000, FILES, 1_000_000)
+  test('no save suggestion while a compaction waits to run', async ($, on) => {
+    const { commands, suggestions, clock } = engine(on, undefined, true, 870_000, FILES, 1_000_000)
     await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
     await $.tool.call({ tool: TOOL_ID, instructions: INSTRUCTIONS, checkpoint: CKPT } as never)
     await $.turn.complete(turnEnd('answer'))
     await clock.advance(200)
-    // A message typed meanwhile ends its turn before that /compact runs; saving then would only compact again.
+    // A message typed meanwhile ends its turn before that /compact runs; a save then would only compact again.
     await $.turn.complete(turnEnd('answer'))
     await clock.advance(200)
     expect(commands.map(c => c.command)).toEqual(['compact'])
+    expect(suggestions).toEqual([])
   })
-  test('the default, suggest, never saves on its own', async ($, on) => {
+  test('it never saves on its own: it suggests', async ($, on) => {
     const { commands, suggestions, clock } = engine(on, undefined, true, 870_000, FILES, 1_000_000)
     await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
     await $.turn.complete(turnEnd('answer'))
@@ -409,7 +382,7 @@ describe('adaptive: the pending list and the automatic save', () => {
     expect(commands).toEqual([])
     expect(suggestions).toEqual(['/smart-compact:save'])
   })
-  test('off: no automatic save and no suggestion', { options: { autoSave: 'off' } }, async ($, on) => {
+  test('suggestAt -1: no suggestion', { options: { suggestAt: -1 } }, async ($, on) => {
     const { commands, suggestions, clock } = engine(on, undefined, true, 870_000, FILES, 1_000_000)
     await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
     await $.turn.complete(turnEnd('answer'))
@@ -417,13 +390,13 @@ describe('adaptive: the pending list and the automatic save', () => {
     expect(commands).toEqual([])
     expect(suggestions).toEqual([])
   })
-  test('a low /autocompact point counts from the first turn, far below the model window', { options: { autoSave: 'boundary' } }, async ($, on) => {
+  test('a low /autocompact point counts from the first turn, far below the model window', async ($, on) => {
     // Regression, 2026-11-04: the point was only read past 20% of the window, so 150k of a 1M window never asked.
-    const { commands, clock } = engine(on, undefined, true, 150_000, FILES, 160_000)
+    const { suggestions, clock } = engine(on, undefined, true, 150_000, FILES, 160_000)
     await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
     await $.turn.complete(turnEnd('answer'))
     await clock.advance(200)
-    expect(commands).toEqual([{ command: 'smart-compact:save', args: 'auto' }])
+    expect(suggestions).toEqual(['/smart-compact:save']) // 60% of 160k, not of the 1M window
   })
 })
 

@@ -1,19 +1,26 @@
 # State
 
-**Version:** 0.3.1 (0.2 "long-horizon", adaptive items 1 and 2, and one compaction at a time), on local branch `long-horizon`, **committed locally, not pushed**. Public `main` (github.com/ryanonline1234/smart-compact, site smart-compact.vercel.app) is still 0.1.0.
+**Version:** 0.3.2 on local branch `long-horizon`, **committed locally, not pushed**. That is 0.2 "long-horizon", adaptive item 1 (pending-list capture), one compaction at a time (0.3.1), and the automatic save retired (0.3.2). Public `main` (github.com/ryanonline1234/smart-compact, site smart-compact.vercel.app) is still 0.1.0.
 
-**Installed for the author:** loaded from this working copy via `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` (backups: `settings.json.pre-smart-compact-0.2.bak`, `settings.json.pre-autosave.bak`), options under `pluginConfigs["smart-compact@inline"]` (`suggestAt: 400000`, `autoSave: boundary`). Profile: `~/.claude/smart-compact/profile.md`. The pre-plugin skill and mod are in `~/Archive/` (logged in `~/Archive/CLEANUP-LOG-2026-10-11.txt`).
+**Installed for the author:** loaded from this working copy via `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`, options under `pluginConfigs["smart-compact@inline"]`: `suggestAt: 400000`; `autoSave` removed 2026-11-04. Backups: `settings.json.pre-smart-compact-0.2.bak`, `settings.json.pre-autosave.bak`, `settings.json.pre-retire-autosave.bak`. Profile: `~/.claude/smart-compact/profile.md`. The pre-plugin skill and mod are in `~/Archive/` (logged in `~/Archive/CLEANUP-LOG-2026-10-11.txt`).
 
-**Verified (2026-11-04):** 47 unit tests; `claude plugin validate`; type check. `scripts/e2e_long.py`: automatic compaction A/B, two runs per arm, contract on kept 3/3 open questions and recs (marker present), off kept 0/3; two-save scenario from `/`: project-root keyed, `previous` linked, three rules carried, conditional approval recorded, section targets, guard refused once then queued.
+**How it behaves now:**
+- **Checkpoints are written only by `/smart-compact:save`,** with a suggestion once past 400k.
+- **Every compaction, Claude Code's own included,** carries the summary contract and the pending decision list verbatim.
+- **One `/compact` at a time:** a second queue call while one waits answers "Already queued".
 
-**Adaptive (2026-11-04):** items 1 (pending-list capture) and 2 (automatic save at the turn boundary) of `docs/01-adaptive-proposal.md` are built: 62 unit tests; e2e boundary run saved at 79% of a 117k point and compacted at 103k, before the engine; summary kept 3/3 questions verbatim. Items 3–5 not built.
+**Verified:**
+- **2026-11-04, 0.3.2:**
+  - 62 unit tests pass;
+  - `claude plugin validate` passes;
+  - the type check is clean.
+- **Earlier, still standing:**
+  - `scripts/e2e_long.py`'s automatic-compaction A/B: with the contract on, 3/3 open questions and recs were kept; with it off, 0/3.
+  - The two-save scenario: keyed by project root, carry-forward, the conditional approval recorded.
+  - `--scenario double`: two compactions on 0.3.0, one on 0.3.1.
 
-**Activation (checked 2026-11-04):** fresh sessions on 2.1.310 (CLI) and 2.1.309 (desktop app) load 0.3.0 from this folder as `smart-compact@inline`, with both commands and the queue tool. Sessions opened before the 10:06 switch run the old version until reopened; the author's restarted session picked up 0.3.
+**Retired in 0.3.2: autoSave "boundary"** (the automatic save at a turn's end). The first real one, in a Buildable session, worked but led to a double compaction. More basically, a save turn races the engine's threshold: in the e2e it compacted with 3k to spare. DECISIONS.md has the reasoning.
 
-**First real automatic save (2026-11-04 23:35Z, a Buildable session with a 1M window):** it started 4 s after a turn ended, at about 0.9M tokens, wrote a correct checkpoint (the carry-forward guard refused once; the save settled the item and queued), and absorbed no reply. **Bug found there, double compaction:** a `/smart-compact:save` the author typed during it ran as soon as it ended, found nothing new, reused the checkpoint and queued a second `/compact`. Both ran: 907,832 tokens to a summary (53 s), then 40,294 tokens to a summary of that summary (47 s). Cause: the queue tool queued even while an earlier `/compact` had been handed over and not yet run.
+**Next:** build `docs/02-autocompact-checkpoints.md`, in which a `$.model.fork` writes a checkpoint at each compaction Claude Code starts. Build it in a separate worktree. It goes live in the author's setup only if its checkpoints match manual ones on every rubric line, in 3 of 3 A/B runs. Later: decide whether to push to the public repo; then update the site (it describes 0.1) and redeploy with `cd site && vercel deploy --prod --yes` after deleting any `.env.local`.
 
-**Fixed in 0.3.1 (2026-11-04): one `/compact` at a time.** While a handed-over `/compact` has not run, the queue tool answers "Already queued" instead of queuing another. A newer checkpoint saved meanwhile rides on the waiting compaction (its instructions are swapped in `session.compact`). No automatic save or suggestion starts while one waits. A `/compact` still waiting after 3 main turns counts as dropped, so a lost one cannot block saves for the rest of a session. **Verified:** 66 unit tests (the 3 new queue tests fail on 0.3.0), type check, `claude plugin validate`. E2E `--scenario double` (a second queue call sent at the save turn's end): on 0.3.0 two compactions, 80,449 → 23,417 then 23,667 → 26,774 (the second summary came out larger than its input); on 0.3.1 one compaction, the second call answered "Already queued". `--scenario boundary` on 0.3.1: the save started at 102k of a 117k point and compacted once at 114k, 3/3 questions verbatim. **Not verified end to end:** the newer-checkpoint swap and the 3-turn drop (unit tests only). **Noticed:** the boundary save started at 102k, past the 92k line, because one turn read a large file; that left 3k of room.
-
-**Next:** `docs/02-autocompact-checkpoints.md` plans checkpoints written by a `$.model.fork` at Claude Code's own compactions, at manual-save quality, replacing autoSave boundary; five decisions are open there. Spike (2026-11-04): the fork works in an SDK-mode session and inside an `auto` compaction, alongside the engine's summary at no added time; `precompute` was not seen in `-p`. Until it is built, watch one more automatic save in a real session. Later: decide whether to push to the public repo; then update the site (it describes 0.1) and redeploy with `cd site && vercel deploy --prod --yes` after deleting any `.env.local`.
-
-**Ideas, not started:** measure CJK; measure Fable 5.1's tokenizer; `claude plugin eval` graders for the skill's behavior; rehydrate tiers (core vs full) if the contract proves not enough.
+**Ideas, not started:** measure CJK; measure Fable 5.1's tokenizer; `claude plugin eval` graders for the skill's behavior.

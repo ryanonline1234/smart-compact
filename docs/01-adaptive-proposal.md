@@ -1,6 +1,6 @@
 # 01 — Adaptive smart-compact
 
-_Status, 2026-11-04: items 1 and 2 BUILT on the `long-horizon` branch (see DECISIONS.md); items 3–5 are proposals._
+_Status, 2026-11-04: item 1 BUILT on the `long-horizon` branch. Item 2 was built in 0.3 and RETIRED in 0.3.2 (see DECISIONS.md); `02-autocompact-checkpoints.md` replaces it. Items 3–5 are proposals._
 
 ## What the sessions show
 

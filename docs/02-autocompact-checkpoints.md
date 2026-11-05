@@ -1,6 +1,6 @@
 # 02 — Checkpoints at Claude Code's own compactions
 
-_Status, 2026-11-04: plan, not built. It would replace autoSave "boundary" (0.3). Spike done; decisions below are open._
+_Status, 2026-11-04: approved, building. autoSave "boundary" is retired (0.3.2). Ryan, on "Build option 2 with the recs?": "go ahead and retire autosave" … "yeah update the local skill if the current one is worse", so the recs stand and the quality gate decides whether it goes live._
 
 ## Why
 

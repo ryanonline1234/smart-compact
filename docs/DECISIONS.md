@@ -42,3 +42,8 @@ Append-only. Each entry: the decision, then why.
 - **No automatic save or suggestion while a compaction waits.** A message typed meanwhile re-arms autoSave, and a save at that turn's end would queue a second compaction.
 - **A waiting `/compact` counts as dropped after 3 main turns.** Whether `$.command.run` settles when the engine drops a queued command is unverified; without a bound, a lost one would block every later save in the session.
 - **The e2e forces the second queue call** instead of sending a second `/smart-compact:save`. Sonnet 5.5 and Opus 5.5 both declined a plain second save in tests (nothing new), so a plain one tests the model, not the plugin. Plain text sent mid-turn joins the running turn, so the call is sent at the save turn's end.
+
+## 2026-11-04 (0.3.2: the automatic save retired)
+
+- **autoSave "boundary" is removed: its code, option, skill argument and e2e scenario** (Ryan: "go ahead and retire autosave"). A save turn has to start and finish before the engine's threshold, so it races it. In the e2e it compacted at 114k against a 117k point. In the first real session it led to a double compaction, and an engine compaction during a save still could. Two compactors in one session is the defect; timing tweaks only narrow the race. Checkpoints at the engine's own compactions are to come from `docs/02-autocompact-checkpoints.md` instead, with no model turn in the main loop.
+- **The suggestion stays, and `suggestAt: -1` now turns it off** (`autoSave: off` did before). A manual save at a deliberate boundary is still the best checkpoint.

@@ -266,26 +266,3 @@ export function askInstruction(ask: PendingAsk): string {
   parts.push(ask.answer === undefined ? 'Not answered yet.' : `The user's reply, verbatim: "${ask.answer}"`)
   return parts.join('\n')
 }
-
-// ---------------------------------------------------------------- automatic save
-
-export type AutoSaveMode = 'off' | 'suggest' | 'boundary'
-
-/** Bash commands that close an iteration: a commit, merge, push or tag, or a production deploy. */
-export const BOUNDARY_COMMAND = /\bgit\s+(?:-C\s+\S+\s+)?(?:commit|merge|push|tag)\b|\bvercel\b[^\n]*--prod\b|(?:^|[\s;&|])[\w./~-]*deploy\.sh\b|\b(?:npm|pnpm|yarn|bun)\s+run\s+deploy\b/i
-/** Files written at the end of a round: a numbered handoff, the state file, the decision log. */
-export const BOUNDARY_FILE = /(?:^|\/)(?:HANDOFF\/\d+[^/]*\.md|STATE\.md|DECISIONS\.md)$/
-
-/**
- * Why to save now, at the end of a turn, or undefined. Measured 2026-11-04: 13
- * of 17 automatic compactions fired on the user's next message, right after a
- * turn ended just under the limit; 20 of 58 compactions came right after a
- * commit, merge or deploy, the cheapest place to compact.
- */
-export function autoSaveReason(tokens: number, autoCompactAt: number, isBoundary: boolean): 'near' | 'boundary' | undefined {
-  // The save turn itself costs about 12k tokens (measured 2026-11-04: 103k → 115k against a 117k point),
-  // so "near" always leaves it at least 25k of room, whatever the window.
-  if (tokens >= Math.min(0.85 * autoCompactAt, autoCompactAt - 25_000)) return 'near'
-  if (isBoundary && tokens >= 0.5 * autoCompactAt) return 'boundary'
-  return undefined
-}

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { askInstruction, autoSaveReason, blocks, BOUNDARY_COMMAND, BOUNDARY_FILE, carryForwardGaps, contractFrom, DEFAULT_CONTRACT, extractList, isCarried, isSettled, listItems, nudgeThreshold, pendingAsk, pointerLine, sectionText, withContract } from './ledger'
+import { askInstruction, blocks, carryForwardGaps, contractFrom, DEFAULT_CONTRACT, extractList, isCarried, isSettled, listItems, nudgeThreshold, pendingAsk, pointerLine, sectionText, withContract } from './ledger'
 import { ASKING } from './test-fixtures'
 
 const PREVIOUS = `---
@@ -134,22 +134,3 @@ describe('pending asks', () => {
     expect(askInstruction({ list: LIST_ONLY, answer: 'go with recs' })).toContain('The user\'s reply, verbatim: "go with recs"')
   })
 })
-
-describe('the automatic-save trigger', () => {
-  test('85% of the auto-compaction point, or 50% right after a boundary', () => {
-    expect(autoSaveReason(850_000, 1_000_000, false)).toBe('near')
-    expect(autoSaveReason(849_000, 1_000_000, false)).toBe(undefined)
-    expect(autoSaveReason(500_000, 1_000_000, true)).toBe('boundary')
-    expect(autoSaveReason(499_000, 1_000_000, true)).toBe(undefined)
-    // A small window keeps 25k of room for the save turn: 117k point → near from 92k.
-    expect(autoSaveReason(92_000, 117_000, false)).toBe('near')
-    expect(autoSaveReason(91_000, 117_000, false)).toBe(undefined)
-  })
-  test('commands and files that close a round', () => {
-    for (const c of ['git commit -m "x"', 'git -C ~/b merge feat', 'cd site && vercel deploy --prod --yes', 'scripts/deploy.sh --prod', 'npm run deploy']) expect(BOUNDARY_COMMAND.test(c)).toBe(true)
-    for (const c of ['git status', 'git log --oneline', 'echo redeploying', 'vercel ls']) expect(BOUNDARY_COMMAND.test(c)).toBe(false)
-    for (const f of ['/p/HANDOFF/84_COST_CHECK.md', '/p/STATE.md', '/p/docs/DECISIONS.md']) expect(BOUNDARY_FILE.test(f)).toBe(true)
-    for (const f of ['/p/src/state.ts', '/p/HANDOFF/README.md']) expect(BOUNDARY_FILE.test(f)).toBe(false)
-  })
-})
-

@@ -1,8 +1,8 @@
 import type { Register } from 'claude-code'
 import { estimateDetails, estimateLine, estimateOf, fmtK, isRead, measureTarget, parseCheckpoint, reattachedFromTranscript, readTarget, tokensOf } from './estimate'
 import type { Estimate, Manifest, Measured } from './estimate'
-import { askInstruction, autoSaveReason, BOUNDARY_COMMAND, BOUNDARY_FILE, carryForwardGaps, contractFrom, nudgeThreshold, pendingAsk, pointerLine, PROFILE_PATH, withContract } from './ledger'
-import type { AutoSaveMode, Row } from './ledger'
+import { askInstruction, carryForwardGaps, contractFrom, nudgeThreshold, pendingAsk, pointerLine, PROFILE_PATH, withContract } from './ledger'
+import type { Row } from './ledger'
 
 // smart-compact's hooks module. /smart-compact:save writes a checkpoint, then
 // calls this module's tool instead of asking the person to paste /compact. The
@@ -15,8 +15,8 @@ import type { AutoSaveMode, Row } from './ledger'
 // latest checkpoint's pointer; a save that drops a rule or an open decision the
 // previous checkpoint held is refused until it carries or retires it.
 // Adaptive additions: every compaction quotes the newest pending decision list
-// verbatim; with autoSave "boundary", a turn that ends near the auto-compaction
-// point, or right after a commit/merge/deploy, is followed by an automatic save.
+// verbatim. (0.3's automatic save at the turn boundary was retired in 0.3.2: a
+// model turn racing the engine's own compaction left two compactors in one session.)
 
 export const PLUGIN = 'smart-compact'
 export const TOOL = 'compact_after_turn'
@@ -146,12 +146,6 @@ export const register: Register = (on, options) => {
   let profilePath: string | undefined
   /** The newest checkpoint this session queued; later compactions keep pointing at it. */
   let lastCheckpoint: { path: string; savedAt: string } | undefined
-  // autoSave: "suggest" (default) only suggests; "boundary" saves on its own at a turn's end; "off" does neither.
-  const autoSave: AutoSaveMode = options.autoSave === 'off' || options.autoSave === 'boundary' ? options.autoSave : 'suggest'
-  /** A commit, merge, deploy or round-closing file write since the user last spoke. */
-  let sawBoundary = false
-  /** An automatic save was queued; no second one until a compaction or the user's next message. */
-  let isAutoSaving = false
 
   on('session.start', async ($, e, next) => {
     try {
@@ -286,8 +280,6 @@ export const register: Register = (on, options) => {
     const result = await next(event)
     if (e.agentId === undefined && e.trigger !== 'precompute' && result.skip === undefined) {
       isNudged = false
-      isAutoSaving = false
-      sawBoundary = false
     }
     if (expecting !== undefined && e.agentId === undefined && e.trigger !== 'precompute') {
       outcome = result.skip !== undefined ? { skip: result.skip } : { tokensBefore: result.tokensBefore, tokensAfter: result.tokensAfter }
@@ -303,32 +295,6 @@ export const register: Register = (on, options) => {
   on('classic.SessionStart', ($, e, next) => (notePath(e.transcript_path), next(e))).catch(($, e, next) => next(e))
   on('classic.UserPromptSubmit', ($, e, next) => (notePath(e.transcript_path), next(e))).catch(($, e, next) => next(e))
 
-  // The user's own message re-arms the automatic save and starts a new stretch for the boundary signal.
-  on('prompt.submit', ($, e, next) => {
-    if (e.origin.kind === 'composer' || e.origin.kind === 'sdk' || e.origin.kind === 'bridge') {
-      isAutoSaving = false
-      sawBoundary = false
-    }
-    return next(e)
-  }).catch(($, e, next) => next(e))
-
-  // Observe only: the main loop's commits, merges, deploys and round-closing writes mark a boundary.
-  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    const result = await next(e)
-    if (e.agentId === undefined && BOUNDARY_COMMAND.test(String(e.command ?? ''))) sawBoundary = true
-    return result
-  }).catch(($, e, next) => next(e))
-  on('tool.call', { tool: 'Write' }, async ($, e, next) => {
-    const result = await next(e)
-    if (e.agentId === undefined && BOUNDARY_FILE.test(String(e.file_path ?? ''))) sawBoundary = true
-    return result
-  }).catch(($, e, next) => next(e))
-  on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
-    const result = await next(e)
-    if (e.agentId === undefined && BOUNDARY_FILE.test(String(e.file_path ?? ''))) sawBoundary = true
-    return result
-  }).catch(($, e, next) => next(e))
-
   on('turn.complete', async ($, e, next) => {
     const answered = await next(e)
     if (e.agentId !== undefined) return answered
@@ -342,7 +308,7 @@ export const register: Register = (on, options) => {
         expecting = undefined
         superseding = undefined
       }
-      if (autoSave === 'off' || e.reason !== 'answer') return answered
+      if (e.reason !== 'answer') return answered
       try {
         const { context } = await $.session.usage()
         // Where Claude Code will compact on its own: read at the first turn's end and every 10th turn after,
@@ -355,26 +321,6 @@ export const register: Register = (on, options) => {
           } catch {
             // keep the last reading
           }
-        }
-        // Automatic save at the turn boundary, before the user's next message overflows the window.
-        const reason = context.tokens === undefined ? undefined : autoSaveReason(context.tokens, autoCompactAt ?? context.window, sawBoundary)
-        if (autoSave === 'boundary' && !isAutoSaving && reason !== undefined && context.tokens !== undefined) {
-          isAutoSaving = true
-          const at = autoCompactAt ?? context.window
-          const pct = Math.round((100 * context.tokens) / at)
-          $.ui.log(
-            reason === 'near'
-              ? `smart-compact: context is at ≈${fmtK(context.tokens)}, ${pct}% of where Claude Code compacts on its own (≈${fmtK(at)}). Saving now (autoSave), before a turn crosses it. Rehydrating stays your choice.`
-              : `smart-compact: a commit, merge, deploy or round-closing write just happened, with context at ≈${fmtK(context.tokens)} (${pct}% of the auto-compaction point). Saving now (autoSave), while it is cheap. Rehydrating stays your choice.`,
-          )
-          // Not from inside the hook the turn waits on: a command run there is refused.
-          $.clock.after(COMPACT_DELAY_MS, () => {
-            $.command.run({ command: 'smart-compact:save', args: 'auto' }).catch((err: unknown) => {
-              isAutoSaving = false
-              $.ui.log(`smart-compact: the automatic save did not start (${errorText(err)}). /smart-compact:save does it by hand.`)
-            })
-          })
-          return answered
         }
         if (suggestAt < 0 || isNudged) return answered
         const threshold = nudgeThreshold(suggestAt, context.window, autoCompactAt)
