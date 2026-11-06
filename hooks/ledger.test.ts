@@ -152,7 +152,7 @@ describe('pending asks', () => {
   })
 })
 
-// 0.6: the captured list is held across compactions until the user answers it (docs/04's correction, the fridge case).
+// 0.6: the captured list is held across compactions until the user answers it (docs/04's correction; docs/06).
 describe('a pending ask held across compactions', () => {
   const NOW = new Date('2026-11-06T12:00:00Z')
   const READ = (i: number) => `Read notes-${i}.md in full with the Read tool, then reply only with: read ${i}.`
