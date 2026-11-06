@@ -67,3 +67,14 @@ _Run 2026-11-05, 9 sessions, `claude-sonnet-5-5`, CLI 2.1.310. Raw output: `~/sm
 - use n = 5 per arm.
 
 The arms, the scenario and the decision rule above stay as registered; only the instrument changes, and this section will say so.
+
+### Correction, 2026-11-05: the `after` arm delivered; what failed was the check and the capture's reach
+
+A diagnosis after the results changes the reading. The decision rule still isn't applied.
+
+- **Delivery works.** A one-off mod returning SessionStart(`compact`) additional context saw `source=compact` after a `/compact`, and the model quoted the added line back exactly.
+- **The `after` arm delivered at the first compaction in 3 of 3 runs.** The transcripts show the appended copy after compaction #1 in each run. The validity check looked only after the *last* compaction, so the arm was wrongly marked invalid. That was a harness error.
+- **No copy came after the second and third compactions, in either placement.** Capture looks back six user messages in the current transcript. After the first compaction, the list sits further back than that, or only inside the summary, so nothing new is captured. From then on, the list survives only through the summary chain, which the contract keeps verbatim (9 of 9). So these runs compared "contract chain" against "off". They never compared the two placements.
+- **The design gap this exposes:** a pending decision list is captured once and then depends on the summarizer. To make capture hold across several compactions, the plugin would keep the captured list until the user answers it (in `$.store`, like the save offer's state) and supply it at every compaction. Then a placement test would compare like with like.
+
+The re-run plan above stands, with two changes: test placement only after capture persists, and check delivery after *each* compaction.
