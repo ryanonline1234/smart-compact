@@ -246,6 +246,8 @@ describe('the save suggestion in a band', () => {
   const user = (text: string) => ({ role: 'user' as const, text, toolUses: [] })
   test('a round closed since the user last spoke: a commit, merge, deploy, or a state-file write', () => {
     expect(boundarySince([user('build it'), bash('git commit -m "x"')])).toBe(true)
+    // A commit before the user's latest message, which began with a system-reminder (the main session's review, 2026-11-06).
+    expect(boundarySince([user('build it'), bash('git commit -m "x"'), user('<system-reminder>note</system-reminder>\nnow fix login')])).toBe(false)
     expect(boundarySince([user('build it'), { role: 'assistant', text: '', toolUses: [{ tool: 'Write', input: { file_path: '/p/HANDOFF/97_BATTERY.md' } }] }])).toBe(true)
     expect(boundarySince([bash('git commit -m "x"'), user('next one')])).toBe(false) // before the user's message
     expect(boundarySince([user('build it'), bash('git status')])).toBe(false)

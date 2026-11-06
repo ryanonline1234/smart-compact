@@ -467,7 +467,7 @@ export function boundarySince(rows: readonly Row[]): boolean {
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i]
     if (r === undefined) continue
-    if (r.role === 'user' && r.text.trim() !== '' && !r.text.trimStart().startsWith('<')) return false
+    if (r.role === 'user' && isOwnText(r.text)) return false
     for (const u of r.toolUses ?? []) {
       const command = u.input?.command
       const file = u.input?.file_path

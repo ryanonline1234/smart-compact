@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { autoName, carryDropped, composeCheckpoint, dirtyFiles, droppedItems, dropMissingTargets, editedFilesOf, fallbackCheckpoint, turnState, forkPrompt, gapAppendix, newestCheckpoint, projectDirGuess, recentFilesOf, stampOf, writeStepsFrom } from './autockpt'
+import { autoName, carryDropped, composeCheckpoint, dirtyFiles, droppedItems, dropMissingTargets, editedFilesOf, fallbackCheckpoint, turnState, forkPrompt, gapAppendix, newestCheckpoint, projectDirGuess, recentFilesOf, stampOf, userMessages, writeStepsFrom } from './autockpt'
 import type { AutoInput } from './autockpt'
 import { carryForwardGaps } from './ledger'
 import { ASKING, AUTO_PREVIOUS } from './test-fixtures'
@@ -170,6 +170,23 @@ describe('where the turn stood at the compaction', () => {
   test('a call still running has no result yet; an answered message is not mid-turn', () => {
     expect(turnState([read4, { role: 'assistant', text: '', toolUses: [{ tool: 'Bash', input: { command: 'npm test' } }] }]).calls).toEqual([{ tool: 'Bash', on: 'npm test', hasReturned: false }])
     expect(turnState([read4, { role: 'assistant', text: 'read 4', toolUses: [] }]).isMidTurn).toBe(false)
+  })
+  // The main session's review, 2026-11-06: some prompts begin with system-reminder blocks; they are still the user's.
+  const WRAPPED = '<system-reminder>\nLinked sessions now: none.\n</system-reminder>\nNow fix the login bug.'
+  test('a prompt that starts with a system-reminder is the latest user message; summary and skill rows are not', () => {
+    const t = turnState([
+      read4,
+      { role: 'assistant', text: 'read 4', toolUses: [] },
+      { role: 'user', text: WRAPPED, toolUses: [] },
+      { role: 'user', text: 'Base directory for this skill: /x', toolUses: [] },
+      { role: 'assistant', text: '', toolUses: [{ tool: 'Read', input: { file_path: '/p/src/auth.ts' } }] },
+    ])
+    expect(t.latestUser).toBe('Now fix the login bug.')
+    expect(t.calls).toEqual([{ tool: 'Read', on: '/p/src/auth.ts', hasReturned: false }])
+  })
+  test("the plugin's own checkpoint keeps reminder-prefixed prompts, without the reminder", () => {
+    const got = userMessages([read4, { role: 'user', text: WRAPPED, toolUses: [] }, { role: 'user', text: '[smart-compact] notice', toolUses: [] }, { role: 'user', text: 'This session is being continued from a previous conversation.', toolUses: [] }], 5)
+    expect(got).toEqual(['Read notes/notes-4.md in full, then reply only with: read 4.', 'Now fix the login bug.'])
   })
   test('the fork reads the turn as facts, and the four corrections', () => {
     const facts = { ...input().facts, turn: turnState([read4, { role: 'assistant', text: '', toolUses: [{ tool: 'Read', input: { file_path: '/p/notes/notes-4.md' }, text: '…' }] }]) }

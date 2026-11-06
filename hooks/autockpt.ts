@@ -5,7 +5,7 @@
 // profile, the previous checkpoint and the disk facts a save would look up with
 // its tools. The plugin then checks them like a manual save. Pure functions
 // only; register.ts runs them.
-import { askInstruction, blocks, isCarried, isSettled, listItems, sectionText } from './ledger'
+import { askInstruction, blocks, isCarried, isOwnText, isSettled, listItems, ownText, sectionText } from './ledger'
 import type { PendingAsk, Row } from './ledger'
 
 /** Checkpoint file names this plugin and the save skill write. */
@@ -127,7 +127,7 @@ export function turnState(rows: readonly Row[]): TurnState {
   let at = -1
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i]
-    if (r?.role === 'user' && r.text.trim() !== '' && !r.text.trimStart().startsWith('<')) {
+    if (r?.role === 'user' && isOwnText(r.text)) {
       at = i
       break
     }
@@ -141,7 +141,7 @@ export function turnState(rows: readonly Row[]): TurnState {
   )
   const last = after.filter(r => r.role === 'assistant').pop()
   const isMidTurn = last === undefined || (last.toolUses ?? []).length > 0 || last.text.trim() === ''
-  return { latestUser: at === -1 ? undefined : clip(rows[at]?.text ?? '', MAX_USER_MESSAGE), isMidTurn, calls }
+  return { latestUser: at === -1 ? undefined : clip(ownText(rows[at]?.text ?? ''), MAX_USER_MESSAGE), isMidTurn, calls }
 }
 
 /** The directory most of those files sit in: where to look for the project's git root. */
@@ -360,8 +360,8 @@ export function userMessages(rows: readonly Row[], n: number): string[] {
   for (let i = rows.length - 1; i >= 0 && out.length < n; i--) {
     const r = rows[i]
     if (r === undefined || r.role !== 'user') continue
-    const t = r.text.trim()
-    if (t === '' || t.startsWith('<') || t.startsWith('[smart-compact')) continue
+    const t = ownText(r.text)
+    if (!isOwnText(r.text) || t.startsWith('[smart-compact')) continue
     out.unshift(clip(t, MAX_USER_MESSAGE))
   }
   return out
