@@ -1,6 +1,6 @@
 # State
 
-**Version:** 0.6.0 on local branch `long-horizon` (02ca3a5), **committed locally, not pushed**, and live as the author's snapshot since 2026-11-06. 0.4.0 (checkpoints at Claude Code's own compactions), plus 0.5.0's manual-save fixes and settings (a save band the model offers, `autoRehydrate`), plus 0.5.1: the fork retuned and re-gated, and the save offer made restart-proof, plus 0.6.0: the pending list held across compactions until the user answers it. Public `main` (github.com/ryanonline1234/smart-compact, site smart-compact.vercel.app) is still 0.1.0.
+**Version:** 0.6.0 on `long-horizon`, **public on `main` since 2026-11-06** (pushed as a fast-forward on Ryan's "Yes, after the pass"), and live as the author's snapshot (02ca3a5) since 2026-11-06. 0.4.0 (checkpoints at Claude Code's own compactions), plus 0.5.0's manual-save fixes and settings (a save band the model offers, `autoRehydrate`), plus 0.5.1: the fork retuned and re-gated, and the save offer made restart-proof, plus 0.6.0: the pending list held across compactions until the user answers it. Public `main` (github.com/ryanonline1234/smart-compact) is 0.6.0. The site, smart-compact.vercel.app, is deployed for 0.6.0. A fresh install from the public marketplace gives 0.6.0 with both skills, checked in a scratch config.
 
 **Installed for the author:** a snapshot at `~/.claude/smart-compact/plugin`, outside this checkout, made by `scripts/install-live.sh [ref]` (default `long-horizon`; `.snapshot` there names the commit). `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` points at it. Options under `pluginConfigs["smart-compact@inline"]`: `suggestFrom: 600000`, `suggestTo: 700000`, `autoRehydrate: "always"`. **Merging is no longer deploying:** run the script after a merge to go live. Settings backups: `.pre-smart-compact-0.2.bak`, `.pre-autosave.bak`, `.pre-retire-autosave.bak`, `.pre-0.5-settings.bak`, `.pre-live-snapshot.bak`. Profile: `~/.claude/smart-compact/profile.md`. A/B results: `~/smart-compact-runs/`.
 
@@ -42,13 +42,13 @@
 
 **Presentation (2026-11-05, side session):**
 - **README:** leads with "enforcement for Claude Code's compaction", with dated prior art, the contract A/B at 3 runs per arm, Read-tool token figures compared with Claude Code's own 3 bytes/token, the +0.5% explained as errors cancelling, the 0.5.1 fork numbers, and "kept is not followed".
-- **site/:** updated for 0.5.1, with "What survives" and "Prior art" sections; the motion check passes 71/71. **Not deployed:** the live site still shows 0.1.
+- **site/:** updated for 0.6.0, with "What survives" and "Prior art" sections. Rows stack on phones, with no horizontal scroll at 360 or 390px. The motion check passes 71/71. **Deployed 2026-11-06:** `/.env.local` and `/.vercel/` return 404.
 - **New docs:**
   - `docs/03` novelty survey: the guard and pending-list capture were not found elsewhere; the rest pairs prior art with a new last step.
   - `docs/04` placement experiment: pre-registered, inconclusive. A follow-up showed the `after` arm did deliver at the first compaction. The real gap: capture looks back only six user messages, so after the first compaction a pending list survives only through the summary chain. Built in 0.6.0 (`docs/06`), merged and live.
   - `docs/05` reproducible session study, with `scripts/sessions_study.py`. The population and the "go with recs" finding reproduce. A loss re-judge (`scripts/loss_judge.py`, clean headless judges) found 1 and 2 of 47, but missed at least one clear loss, so no rate is cited (4–20%).
 - **Branch `placement-exp`** holds the experimental `pendingAskPlacement` code, not merged.
 
-**Next:** watch the first 600k–700k offer, the automatic rehydrates, and a pending list held past a second compaction in a real session. The live install moved to a snapshot outside the checkout on 2026-11-05: sessions opened before the move still load from `~/smart-compact` and keep hot-reloading on its commits until they are reopened. Later: decide whether to push to the public repo and deploy the reworked site (`site/` is updated for 0.5.1; the live site still shows 0.1).
+**Next:** watch the first 600k–700k offer, the automatic rehydrates, and a pending list held past a second compaction in a real session. The live install moved to a snapshot outside the checkout on 2026-11-05: sessions opened before the move still load from `~/smart-compact` and keep hot-reloading on its commits until they are reopened. Before a push, run a privacy pass over every commit since `origin/main`, patches and messages. On 2026-11-06 it found no secrets, emails, home paths or session ids.
 
 **Ideas, not started:** measure CJK; measure Fable 5.1's tokenizer; `claude plugin eval` graders for the skill's behavior.

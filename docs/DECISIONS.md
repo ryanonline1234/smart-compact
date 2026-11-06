@@ -111,3 +111,8 @@ Append-only. Each entry: the decision, then why.
 ## 2026-11-06 — correction: the fridge case was kept, not dropped
 
 - **The confirmed judge miss in `docs/05` was not a summary drop.** The summary kept the user's redirect verbatim; the assistant didn't act on it afterwards. The redirect also came before the decision list, so the 0.6 hold wouldn't have changed it. The earlier claim that it would have was wrong. `docs/05` and `docs/06` now say so.
+
+## 2026-11-06 — publish 0.6.0 and the site
+
+- **Pushed `long-horizon` to public `main` as a fast-forward and deployed the site,** on Ryan's "Yes, after the pass". The push came first, because the site advertises v0.6.0, and before the push its install command gave 0.1.0 and its docs/03 link returned 404.
+- **What the privacy pass covered:** all 43 commits, patches and messages. It found no secrets, emails, home paths, session ids or contact names. The author's name was already public in `plugin.json` and `LICENSE`.
