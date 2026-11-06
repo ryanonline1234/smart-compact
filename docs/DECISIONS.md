@@ -84,3 +84,14 @@ Append-only. Each entry: the decision, then why.
 - **The live plugin is a snapshot of one commit at `~/.claude/smart-compact/plugin`, refreshed by `scripts/install-live.sh`,** not this git checkout (Ryan: "Yes, move it"). The docs say an interactive session hot-reloads the folder it loads a plugin from, and a reload starts the hooks module over, losing timers and any fork writing a checkpoint. Every commit, worktree and rebase writes into the checkout's `.git`, and two sessions were committing all day. The script syncs by checksum, so an update writes only changed files.
 - **Not in `~/.claude/mods`,** which loads on its own, so the plugin would load twice. **Merging is no longer deploying:** going live is a deliberate run of the script.
 
+## 2026-11-05 (presentation: claims corrected, prior art credited)
+
+- **Position the plugin as enforcement layered on Claude Code's compaction.** A prior-art survey (`docs/03`) found no shipped carry-forward guard, and no mechanical capture of the pending decision list. Contract injection, checkpoint-before-compaction and forking at compaction all exist in October 2026 mods and other agents, so those are credited, not claimed. Claims are dated "not found as of 2026-11-05", never "first".
+- **Correct our own claims rather than amplify them.**
+  - The contract A/B was 3 runs per arm (re-graded from the logs), not one.
+  - The token ratios are Read-tool figures, compared with Claude Code's own 3 bytes/token rather than folk rules.
+  - The table's +0.5% is errors cancelling out; per file it is within 12%.
+  - The 229-session loss count is cited as agent-judged, because a scripted re-measurement (`docs/05`) reproduces the population and the "go with recs" finding but not the losses.
+- **The placement experiment was pre-registered and reported as inconclusive** (`docs/04`): the `after` arm was marked invalid by a check that looked only after the last compaction (it did deliver at the first), and the primary measure measured restating rather than resolving. Its code stays on `placement-exp`, and the decision rule was not applied. The real gap it exposed: capture looks back six user messages, so after the first compaction a pending list survives only through the summary chain.
+- **Site changes keep the motion contract:** the new sections sit inside the evidence scene, and the scroll-spec positions are remapped so hero and stage samples land on the same pixels. Commit only on a clean 71/71.
+

@@ -34,6 +34,15 @@
 
 **Not verified end to end:** a fork-written checkpoint in a real session; the precompute path; `autoRehydrate always` after an engine compaction (unit tests only).
 
-**Next:** watch the first 600k–700k offer and the automatic rehydrates in a real session. The live install moved to a snapshot outside the checkout on 2026-11-05: sessions opened before the move still load from `~/smart-compact` and keep hot-reloading on its commits until they are reopened. Later: decide whether to push to the public repo and update the site (it describes 0.1).
+**Presentation (2026-11-05, side session):**
+- **README:** leads with "enforcement for Claude Code's compaction", with dated prior art, the contract A/B at 3 runs per arm, Read-tool token figures compared with Claude Code's own 3 bytes/token, the +0.5% explained as errors cancelling, the 0.5.1 fork numbers, and "kept is not followed".
+- **site/:** updated for 0.5.1, with "What survives" and "Prior art" sections; the motion check passes 71/71. **Not deployed:** the live site still shows 0.1.
+- **New docs:**
+  - `docs/03` novelty survey: the guard and pending-list capture were not found elsewhere; the rest pairs prior art with a new last step.
+  - `docs/04` placement experiment: pre-registered, inconclusive.
+  - `docs/05` reproducible session study, with `scripts/sessions_study.py`; the loss figure stays agent-judged.
+- **Branch `placement-exp`** holds the experimental `pendingAskPlacement` code, not merged.
+
+**Next:** watch the first 600k–700k offer and the automatic rehydrates in a real session. The live install moved to a snapshot outside the checkout on 2026-11-05: sessions opened before the move still load from `~/smart-compact` and keep hot-reloading on its commits until they are reopened. Later: decide whether to push to the public repo and deploy the reworked site (`site/` is updated for 0.5.1; the live site still shows 0.1).
 
 **Ideas, not started:** measure CJK; measure Fable 5.1's tokenizer; `claude plugin eval` graders for the skill's behavior.
