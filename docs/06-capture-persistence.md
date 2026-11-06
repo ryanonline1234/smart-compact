@@ -61,3 +61,21 @@ Does the held list reach the summarizer at every compaction? And does anything r
   - the fork receiving the held list (unit test only, with `checkpointOnCompact` off here);
   - restart persistence (unit test only).
 - **Scope:** n = 3 per arm, one scenario, one model. The author's settings hooks run in every session.
+
+## Results
+
+_Run 2026-11-06. 6 sessions on `claude-sonnet-5-5`, CLI 2.1.310; the judge was Opus 5.5. Raw output: `~/smart-compact-runs/persist/` (`persist-20261105T174438.json`, the session logs, and one trace folder per run)._
+
+| Arm | Valid runs | Delivered at every compaction | Carried marker on #2 and #3 | Lines verbatim in the last summary | Rules in the last summary | Resolved "Go with recs." |
+|---|---|---|---|---|---|---|
+| base (0.5.1) | 3 of 3 | not traced; by its code, #1 only | — | 9 of 9 | 3 of 3 | 3 of 3 |
+| persist | 3 of 3 | **3 of 3** (3, 3, 3 lines at each of 3 compactions) | 3 of 3 (absent on #1, as registered) | 9 of 9 | 3 of 3 | 3 of 3 |
+
+**Verdict: pass, by the registered rule.** Persist delivered the list at every compaction in 3 of 3 valid runs. It did not regress on any secondary measure: 9 against 9 lines verbatim, 3 against 3 on rules, 3 against 3 resolved.
+
+- **What the runs show:** from the second compaction on, the summarizer is now handed the held list verbatim, marked as carried. With it come the user's messages since, without the kept-verbatim tail counted twice (trace of run 1, compaction #2).
+- **What they don't show:** an outcome gain. As registered, the summary chain alone kept the list in this scenario (base 9 of 9), and every session in both arms resolved the answer. The judge's reasons agree: in all six runs, all three recommendations were acted on, none asked which list was meant, and none applied a different one.
+- **Incidental:** base run 3 compacted four more times while answering, as it reorganised the notes. That is not a measure here.
+- **Instrument note:** the sessions ran with the author's settings and global instructions. One judge reason calls the user "Ryan". This confound is shared by both arms, as registered.
+
+**Correction to the known limits above.** They cite the confirmed judge miss in `docs/05` as a failure of the summary chain. Re-reading that session shows the summary kept the user's redirect verbatim. That was a request kept but not acted on, and it came before the decision list, not in reply to it. So no observed real-session loss of a pending list motivates this change. It rests on the mechanism `docs/04` found: capture did not persist past the first compaction. The fix is defensive.

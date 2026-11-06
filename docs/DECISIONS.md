@@ -100,3 +100,14 @@ Append-only. Each entry: the decision, then why.
 - **Two automated rubric re-judges of the 47 compactions found 1 and 2 losses.** Both cleared all four losses the 2026-11-04 agents had named. Reading those four shows at least one clear miss: after an automatic compaction, the user's change of direction was dropped and they had to write "Address my earlier question". A rate between 4% and 20% is too uncertain to publish. The README and site rest on the mechanism and on published constraint-decay measurements instead. A defensible rate needs human labels, with the judge as a second rater.
 - **The concrete gap all of this points at:** capture looks back six user messages, so a pending decision or change of direction is not re-supplied after the first compaction. Proposed: keep the captured ask in `$.store` until it is answered, and supply it at every compaction. Not built.
 
+
+## 2026-11-06 — hold the pending list until it is answered (0.6.0)
+
+- **The captured list is held in the session's store record and supplied at every compaction,** not only while it sits within six user messages (Ryan: "Yes, build it"). Through 0.5.1, after the first compaction nothing new was captured, and the list depended on the summary chain (`docs/04`, correction).
+- **What ends a hold:** an answer, meaning an approval, a button's label, or a pick by number. The answer rides once with its list. A newer list, 7 days, or 20 messages without an answer also end it.
+  - **Free text doesn't count as an answer,** because a reply that isn't an answer ("read the logs first") would otherwise end the hold too early. The cost: a list the user settled in prose is still supplied, labelled with their messages since, until the 20-message cap.
+- **Gated before any merge** (`docs/06`, pre-registered): delivered at every compaction in 3 of 3 runs, with no regression against 0.5.1. Merging into `long-horizon` waits for the main session's word; going live waits for Ryan's (`scripts/install-live.sh`).
+
+## 2026-11-06 — correction: the fridge case was kept, not dropped
+
+- **The confirmed judge miss in `docs/05` was not a summary drop.** The summary kept the user's redirect verbatim; the assistant didn't act on it afterwards. The redirect also came before the decision list, so the 0.6 hold wouldn't have changed it. The earlier claim that it would have was wrong. `docs/05` and `docs/06` now say so.

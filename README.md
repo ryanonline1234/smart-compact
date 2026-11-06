@@ -59,7 +59,7 @@ Built for sessions that run for days: many rounds of feedback, several compactio
   - keep the latest checkpoint's pointer.
 
   **Measured:** in a forced automatic compaction with the contract on, the summary kept all three open questions and their recommendations verbatim in 3 of 3 runs; with it off, it kept none, in 3 of 3 runs. Both arms kept the user's two rules. Three runs per arm is small (two-sided Fisher on runs, p = 0.10). Each arm mixed two runs of 0.2 and one of 0.3.
-- **The pending list, captured mechanically.** At every compaction, the plugin finds the newest numbered list that asks something (a `?` or a recommendation), or a question asked with buttons, within the last six user messages. It quotes that list verbatim into the compaction instructions, with your reply if there is one. Whether quoting it inside the instructions beats appending it after the summary is being tested: `docs/04-placement-experiment.md`.
+- **The pending list, captured mechanically and held until you answer it.** At every compaction, the plugin finds the newest numbered list that asks something (a `?` or a recommendation), or a question asked with buttons, and quotes it verbatim into the compaction instructions, with your messages since. Until you answer it, it holds the list in the session's store and supplies it at every later compaction too, marked as carried from before an earlier one. An answer is an approval ("go with recs", "yes", "not now"), a button's label, or a pick by number ("build 1 and 2"). It rides along once, and then the hold ends. A newer list replaces the held one. A hold also ends after 7 days, or after 20 messages without an answer. Through 0.5.1 the capture looked back only six user messages, so from the second compaction on the list survived only through the summary chain (`docs/04`, correction). The 0.6 gate: `docs/06-capture-persistence.md`.
 - **Standing rules and open decisions lead the checkpoint and override the rest.** The task state has to agree with them.
 - **The carry-forward guard.** Each checkpoint names the one before it. The save tool refuses a checkpoint that drops a standing rule or an open decision the previous one held, until each is carried, or written as `retired:`, `answered:` or `promoted to <file>:`. It also refuses an `answered:` line that doesn't quote what you said. Only you settle a question put to you.
 - **Checkpoints at compactions you didn't start** (Claude Code's threshold, a precomputed summary, a bare `/compact`).
@@ -168,9 +168,11 @@ It is a mod: code that runs inside Claude Code with your permissions. `claude pl
   - `turn.complete`.
 - **Calls:**
   - reads files listed in your checkpoint, the previous checkpoint, the profile and the session transcript;
-  - reads `HOME` and `SMART_COMPACT_PROFILE`;
+  - reads `HOME`, `SMART_COMPACT_PROFILE` and `SMART_COMPACT_TRACE`;
+  - keeps one record per session in the plugin's store: whether the save was offered, the latest checkpoint's pointer, and the held pending list, pruned after 14 days;
   - runs `/compact`, and `/smart-compact:rehydrate` when `autoRehydrate` is on;
-  - writes transcript notices and a prompt suggestion.
+  - writes transcript notices and a prompt suggestion;
+  - only when `SMART_COMPACT_TRACE` names a folder (for end-to-end checks): writes each compaction's final instructions there.
 - **At a compaction it did not start, it also:**
   - runs read-only git commands (`rev-parse`, `status`, `log`, `ls-files`) in the project;
   - sends one fork of the session, and up to two corrections, through the session's own client;

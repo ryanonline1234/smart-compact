@@ -32,6 +32,11 @@
 - **The offer survives a restart:** in a test session offered once, then resumed in a new process, 0.5.0 offered again (control) and 0.5.1 did not. The record is in `~/.claude/plugins/store/smart-compact_inline-*.json`.
 - **The offer waits for the user's own prompt:** origin composer, sdk or bridge only. `prompt.submit` was measured to run before the classic hook. The peer case itself is not tested end to end, because `-p` cannot send a peer message.
 
+**0.6.0 (2026-11-06, branch `capture-persist`, committed locally, not merged, not live):** the pending decision list is held in the session's store record until the user answers it, and supplied at every compaction (marked as carried once it has left the conversation, with the user's messages since). An approval, a button label or a pick by number ends the hold after one more compaction; so do 7 days, 20 messages without an answer, or a newer list. The compaction fork gets the held list too. `SMART_COMPACT_TRACE` (off unless set) writes each compaction's final instructions to a folder.
+- **Checks:** 127 unit tests pass (18 new), `claude plugin validate` passes, the type check is clean.
+- **Gate (`docs/06`, pre-registered):** `--scenario persist --runs 3`, 0.5.1 against 0.6.0, three automatic compactions per run. Persist delivered the list verbatim at every compaction in 3 of 3 runs; no regression (9 vs 9 lines verbatim, 3 vs 3 rules, 3 vs 3 resolved by a blind judge). Not an outcome gain: the summary chain alone kept the list in this scenario.
+- **Unit tests only:** the fork receiving the held list; the hold surviving a restart.
+
 **Not verified end to end:** a fork-written checkpoint in a real session; the precompute path; `autoRehydrate always` after an engine compaction (unit tests only).
 
 **Presentation (2026-11-05, side session):**
@@ -39,7 +44,7 @@
 - **site/:** updated for 0.5.1, with "What survives" and "Prior art" sections; the motion check passes 71/71. **Not deployed:** the live site still shows 0.1.
 - **New docs:**
   - `docs/03` novelty survey: the guard and pending-list capture were not found elsewhere; the rest pairs prior art with a new last step.
-  - `docs/04` placement experiment: pre-registered, inconclusive. A follow-up showed the `after` arm did deliver at the first compaction. The real gap: capture looks back only six user messages, so after the first compaction a pending list survives only through the summary chain. Proposed: keep the captured list in `$.store` until it is answered, and supply it at every compaction.
+  - `docs/04` placement experiment: pre-registered, inconclusive. A follow-up showed the `after` arm did deliver at the first compaction. The real gap: capture looks back only six user messages, so after the first compaction a pending list survives only through the summary chain. Built in 0.6.0 (`docs/06`), not merged yet.
   - `docs/05` reproducible session study, with `scripts/sessions_study.py`. The population and the "go with recs" finding reproduce. A loss re-judge (`scripts/loss_judge.py`, clean headless judges) found 1 and 2 of 47, but missed at least one clear loss, so no rate is cited (4–20%).
 - **Branch `placement-exp`** holds the experimental `pendingAskPlacement` code, not merged.
 
