@@ -50,7 +50,7 @@ Checkpoints are plain markdown in `~/.claude/checkpoints/<project-slug>/`, keyed
 
 ## What it keeps, and how
 
-Built for sessions that run for days: many rounds of feedback, several compactions, decisions answered with a short "go with recs". Over 229 of the author's interactive sessions, agents reading the transcripts judged what was lost after compactions: standing rules and pending asks, in 7 of 35 compactions, 5 of them automatic. A scripted re-measurement ([`docs/05-session-study.md`](docs/05-session-study.md)) reproduces the population and finds that 78% of "go with recs" replies answer a numbered list. A keyword proxy can't reproduce the loss judgments, so that figure stays agent-judged. It is one person's sessions, not a general result.
+Built for sessions that run for days: many rounds of feedback, several compactions, decisions answered with a short "go with recs". Over 229 of the author's interactive sessions, agents reading the transcripts judged what was lost after compactions: standing rules and pending asks, in 7 of 35 compactions, 5 of them automatic. A scripted re-measurement ([`docs/05-session-study.md`](docs/05-session-study.md)) reproduces the population and finds that 78% of "go with recs" replies answer a numbered list. The loss count does not hold up: two automated re-judges found 1 and 2 losses in 47 compactions, but missed at least one clear loss the agents had found. The rate in these sessions is uncertain, somewhere between about 4% and 20% (details in `docs/05`). It is one person's sessions, not a general result.
 
 - **The summary contract.** The plugin adds instructions to every compaction of the main conversation:
   - keep standing rules, with their date and scope;

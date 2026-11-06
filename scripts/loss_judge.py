@@ -26,7 +26,7 @@ from pathlib import Path
 
 from sessions_study import is_user_message, text_of
 
-CAP_BEFORE, CAP_AFTER, CAP_MSG = 24_000, 10_000, 1_800
+CAP_CARRIED, CAP_TAIL, CAP_AFTER, CAP_MSG = 12_000, 16_000, 10_000, 1_800
 
 RUBRIC = """You are auditing one context compaction in a Claude Code session. Before the compaction, the conversation established things; the compaction replaced that conversation with the SUMMARY; AFTER shows what happened next.
 
@@ -86,13 +86,22 @@ def cases(days: int) -> list[dict]:
                 continue
             seen.add(key)
             start = bounds[n - 1] if n > 0 else 0
+            # v2 (2026-11-05): what the session carried into this stretch (the previous summary), every user message
+            # since (small: median 413 chars), and the conversation's last stretch. v1 gave only the last 24k
+            # characters, which hid rules stated in earlier stretches.
+            carried = next((text_of(r) for r in rows[start:start + 6] if r.get("isCompactSummary")), "") if n > 0 else ""
+            said = [f"USER: {text_of(r).strip()[:1200]}" for r in rows[start:b] if is_user_message(r)]
             before = [l for l in (line_of(r) for r in rows[start:b]) if l]
             summary = next((text_of(r) for r in rows[b:b + 6] if r.get("isCompactSummary")), "")
             end = bounds[n + 1] if n + 1 < len(bounds) else len(rows)
             after = [l for l in (line_of(r) for r in rows[b + 1:end]) if l and not l.startswith("USER: This session is being continued")][:12]
-            b_text = "\n\n".join(before)
-            if len(b_text) > CAP_BEFORE:
-                b_text = "…" + b_text[-CAP_BEFORE:]
+            tail = "\n\n".join(before)
+            tail = "…" + tail[-CAP_TAIL:] if len(tail) > CAP_TAIL else tail
+            b_text = "\n\n".join(part for part in (
+                f"-- What the session carried into this stretch (the previous compaction's summary) --\n{carried[:CAP_CARRIED]}" if carried else "",
+                "-- Everything the user said in this stretch, in order --\n" + "\n\n".join(said),
+                f"-- The conversation's last stretch before the compaction --\n{tail}",
+            ) if part)
             out.append({
                 "id": key, "session": f.stem, "trigger": (rows[b].get("compactMetadata") or {}).get("trigger"),
                 "before": b_text, "summary": summary[:12_000], "after": "\n\n".join(after)[:CAP_AFTER], "after_turns": len(after),
