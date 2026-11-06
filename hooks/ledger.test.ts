@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { askInstruction, blocks, boundarySince, carryForwardGaps, suggestBand, suggestionNote, suggestReason, unquotedAnswers, contractFrom, DEFAULT_CONTRACT, extractList, isAnswer, isCarried, isSettled, listItems, nextAsk, nudgeThreshold, pendingAsk, pointerLine, sectionText, withContract } from './ledger'
+import { askInstruction, blocks, boundarySince, carryForwardGaps, suggestBand, suggestionNote, suggestReason, unquotedAnswers, contractFrom, DEFAULT_CONTRACT, extractList, isAnswer, isCarried, isOwnText, isSettled, listItems, nextAsk, nudgeThreshold, pendingAsk, pointerLine, sectionText, withContract } from './ledger'
 import { ASKING } from './test-fixtures'
 
 const PREVIOUS = `---
@@ -212,6 +212,17 @@ describe('a pending ask held across compactions', () => {
     expect(nextAsk([SUMMARY_ROW], old, NOW)).toEqual({ use: undefined, hold: undefined })
     const busy = { list: LIST_ONLY, replies: [READ(1), READ(2), READ(3)], more: 17, capturedAt: '2026-11-06T11:00:00Z', lastSeen: READ(20) }
     expect(nextAsk([SUMMARY_ROW, row('user', 'one more thing')], busy, NOW)).toEqual({ use: undefined, hold: undefined })
+  })
+  // Found by the main session 2026-11-06: in the desktop app, 7 of 38 of Ryan's prompts began with a system-reminder block.
+  test("a prompt that starts with system-reminder blocks is still the user's reply, stored without them", () => {
+    const wrapped = '<system-reminder>\nLinked sessions now: none.\n</system-reminder>\n<system-reminder>x</system-reminder>\nGo with recs.'
+    const held = { list: LIST_ONLY, replies: [READ(1)], more: 0, capturedAt: '2026-11-06T11:00:00Z', lastSeen: READ(1) }
+    const { use, hold } = nextAsk([SUMMARY_ROW, row('user', wrapped)], held, NOW)
+    expect(use?.replies).toEqual([READ(1), 'Go with recs.'])
+    expect(use?.answer).toBe('Go with recs.')
+    expect(hold).toBe(undefined)
+    expect(pendingAsk([row('assistant', ASKING), row('user', wrapped)])?.answer).toBe('Go with recs.')
+    expect(isOwnText('<system-reminder>only a note</system-reminder>')).toBe(false)
   })
   test('commands, skill bodies and the summary itself are not replies', () => {
     const rows = [row('assistant', ASKING), row('user', '<command-name>/smart-compact:rehydrate</command-name>'), row('user', 'Base directory for this skill: /x'), SUMMARY_ROW]

@@ -283,8 +283,8 @@ export function pendingAsk(rows: readonly Row[], maxUserTurns = 6): PendingAsk |
     const list = row.text.trim() === '' ? undefined : extractList(row.text)
     const buttons = toolAsk(row.toolUses)
     if (list === undefined && buttons === undefined) continue
-    const reply = rows.slice(i + 1).find(r => r.role === 'user' && r.text.trim() !== '' && !r.text.startsWith('<'))
-    const answer = reply === undefined ? undefined : reply.text.trim().slice(0, 400)
+    const reply = rows.slice(i + 1).find(r => r.role === 'user' && isOwnText(r.text))
+    const answer = reply === undefined ? undefined : ownText(reply.text).slice(0, 400)
     return { list, buttons, answer }
   }
   return undefined
@@ -336,9 +336,18 @@ const HOLD_DAYS = 7
 const HOLD_MESSAGES = 20
 const REPLY_CHARS = 400
 
+/**
+ * A prompt without the system-reminder blocks the app puts before it. Row.text joins every text block, and in the
+ * desktop app 7 of 38 of Ryan's prompts began with one (found by the main session 2026-11-06), so a test for a
+ * leading "<" alone dropped them.
+ */
+export function ownText(text: string): string {
+  return text.replace(/^(?:\s*<system-reminder>[\s\S]*?<\/system-reminder>)+/, '').trim()
+}
+
 /** A message the user wrote: not a command, a hook's or skill's text, or a compaction summary. */
 export function isOwnText(text: string): boolean {
-  const t = text.trim()
+  const t = ownText(text)
   return t !== '' && !t.startsWith('<') && !t.startsWith('Base directory for this skill') && !t.startsWith('This session is being continued') && !t.startsWith('[Request interrupted')
 }
 
@@ -356,7 +365,7 @@ export function isAnswer(reply: string, ask: Pick<PendingAsk, 'buttons'>): boole
   return labels.some(l => said === l || said.startsWith(`${l} `) || said.startsWith(`${l},`))
 }
 
-const clip = (s: string) => s.trim().slice(0, REPLY_CHARS)
+const clip = (s: string) => ownText(s).slice(0, REPLY_CHARS)
 
 /** The newest ask anywhere in the rows, with every message the user wrote after it. */
 function newestAsk(rows: readonly Row[]): { list?: string; buttons?: string; replies: string[] } | undefined {
