@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { askInstruction, blocks, boundarySince, carryForwardGaps, suggestBand, suggestionNote, suggestReason, unquotedAnswers, contractFrom, DEFAULT_CONTRACT, extractList, isCarried, isSettled, listItems, nudgeThreshold, pendingAsk, pointerLine, sectionText, withContract } from './ledger'
+import { askInstruction, blocks, boundarySince, carryForwardGaps, suggestBand, suggestionNote, suggestReason, unquotedAnswers, contractFrom, DEFAULT_CONTRACT, extractList, isAnswer, isCarried, isSettled, listItems, nextAsk, nudgeThreshold, pendingAsk, pointerLine, sectionText, withContract } from './ledger'
 import { ASKING } from './test-fixtures'
 
 const PREVIOUS = `---
@@ -149,6 +149,73 @@ describe('pending asks', () => {
     expect(open).toContain(LIST_ONLY)
     expect(open.endsWith('Not answered yet.')).toBe(true)
     expect(askInstruction({ list: LIST_ONLY, answer: 'go with recs' })).toContain('The user\'s reply, verbatim: "go with recs"')
+  })
+})
+
+// 0.6: the captured list is held across compactions until the user answers it (docs/04's correction, the fridge case).
+describe('a pending ask held across compactions', () => {
+  const NOW = new Date('2026-11-06T12:00:00Z')
+  const READ = (i: number) => `Read notes-${i}.md in full with the Read tool, then reply only with: read ${i}.`
+  const SUMMARY_ROW = row('user', 'This session is being continued from a previous conversation that ran out of context.')
+  test('what answers a decision list, and what does not', () => {
+    const ask = { list: LIST_ONLY, buttons: 'Build it? Buttons: "Yes, build it", "Not now".' }
+    for (const yes of ['go with recs', 'Go with recs.', 'go with your recs but skip 3', 'yes', 'Not now', 'Yes, build it', 'Build 1 and 2', 'Plan option 2', '2 and 3', '#1 only', 'no, scrape instead', 'sounds good'])
+      expect([yes, isAnswer(yes, ask)]).toEqual([yes, true])
+    for (const no of [READ(1), 'also check the logs first', 'now i want to make this an entire project where the screen is interactive', 'continue', '2026 numbers look off', '1.5k tokens is a lot'])
+      expect([no, isAnswer(no, ask)]).toEqual([no, false])
+  })
+  test('a fresh, unanswered list is supplied and held, with the messages since', () => {
+    const rows = [row('assistant', ASKING), row('user', READ(1)), row('user', READ(2))]
+    const { use, hold } = nextAsk(rows, undefined, NOW)
+    expect(use?.list).toBe(LIST_ONLY)
+    expect(use?.replies).toEqual([READ(1), READ(2)])
+    expect(hold).toMatchObject({ list: LIST_ONLY, replies: [READ(1), READ(2)], more: 0, capturedAt: NOW.toISOString(), lastSeen: READ(2) })
+  })
+  test('once the list has left the conversation, the held copy is supplied, marked as carried', () => {
+    const held = { list: LIST_ONLY, replies: [READ(1)], more: 0, capturedAt: '2026-11-06T11:00:00Z', lastSeen: READ(1) }
+    const { use, hold } = nextAsk([SUMMARY_ROW, row('user', READ(2)), row('assistant', 'read 2')], held, NOW)
+    expect(use).toMatchObject({ list: LIST_ONLY, isCarried: true, replies: [READ(1), READ(2)] })
+    expect(hold).toMatchObject({ list: LIST_ONLY, replies: [READ(1), READ(2)], capturedAt: '2026-11-06T11:00:00Z', lastSeen: READ(2) })
+    const text = askInstruction(use ?? {})
+    expect(text).toContain('captured before an earlier compaction')
+    expect(text).toContain(LIST_ONLY)
+    expect(text).toContain(`"${READ(1)}"; "${READ(2)}"`)
+  })
+  test('the answer is supplied once with the list, then the hold ends', () => {
+    const held = { list: LIST_ONLY, replies: [READ(1)], more: 0, capturedAt: '2026-11-06T11:00:00Z', lastSeen: READ(1) }
+    const { use, hold } = nextAsk([SUMMARY_ROW, row('user', 'Go with recs.'), row('assistant', 'Applied.')], held, NOW)
+    expect(use?.replies).toEqual([READ(1), 'Go with recs.'])
+    expect(hold).toBe(undefined)
+  })
+  test('messages kept verbatim after the summary are not counted twice', () => {
+    const held = { list: LIST_ONLY, replies: [READ(1), READ(2)], more: 0, capturedAt: '2026-11-06T11:00:00Z', lastSeen: READ(2) }
+    const rows = [SUMMARY_ROW, row('user', READ(2)), row('assistant', 'read 2'), row('user', READ(3))]
+    expect(nextAsk(rows, held, NOW).hold?.replies).toEqual([READ(1), READ(2), READ(3)])
+  })
+  test('past three messages it keeps the first three and counts the rest', () => {
+    const rows = [row('assistant', ASKING), ...[1, 2, 3, 4, 5].map(i => row('user', READ(i)))]
+    expect(nextAsk(rows, undefined, NOW).use).toMatchObject({ replies: [READ(1), READ(2), READ(3)], more: 2 })
+  })
+  test('a newer list replaces the held one', () => {
+    const held = { list: '1. Old question? Rec: old.\n2. Older? Rec: older.', replies: [], more: 0, capturedAt: '2026-11-06T11:00:00Z' }
+    const { use, hold } = nextAsk([SUMMARY_ROW, row('assistant', ASKING)], held, NOW)
+    expect(use?.list).toBe(LIST_ONLY)
+    expect(use?.isCarried).toBe(undefined)
+    expect(hold?.list).toBe(LIST_ONLY)
+  })
+  test('an old list that was answered is neither supplied nor held', () => {
+    const rows = [row('assistant', ASKING), row('user', 'go with recs'), ...Array.from({ length: 7 }, (_, i) => row('user', `message ${i}`))]
+    expect(nextAsk(rows, undefined, NOW)).toEqual({ use: undefined, hold: undefined })
+  })
+  test('a hold ends after seven days, or after twenty messages without an answer', () => {
+    const old = { list: LIST_ONLY, replies: [], more: 0, capturedAt: '2026-10-30T11:00:00Z' }
+    expect(nextAsk([SUMMARY_ROW], old, NOW)).toEqual({ use: undefined, hold: undefined })
+    const busy = { list: LIST_ONLY, replies: [READ(1), READ(2), READ(3)], more: 17, capturedAt: '2026-11-06T11:00:00Z', lastSeen: READ(20) }
+    expect(nextAsk([SUMMARY_ROW, row('user', 'one more thing')], busy, NOW)).toEqual({ use: undefined, hold: undefined })
+  })
+  test('commands, skill bodies and the summary itself are not replies', () => {
+    const rows = [row('assistant', ASKING), row('user', '<command-name>/smart-compact:rehydrate</command-name>'), row('user', 'Base directory for this skill: /x'), SUMMARY_ROW]
+    expect(nextAsk(rows, undefined, NOW).use?.replies).toEqual([])
   })
 })
 

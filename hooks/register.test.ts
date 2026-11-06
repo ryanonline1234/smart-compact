@@ -32,13 +32,14 @@ function engine(
   usageTokens = 1_000,
   files: Record<string, string> = FILES,
   autoAt?: number,
+  env: Record<string, string> = { HOME: '/Users/x' },
 ) {
   const compactions: { instructions?: string }[] = []
   const commands: { command: string; args: string }[] = []
   const logs: string[] = []
   const suggestions: string[] = []
   const clock = mock.clock(on)
-  mock.env(on, { HOME: '/Users/x' })
+  mock.env(on, env)
   on('fs.read', (_, e) => {
     const text = files[e.path]
     if (text === undefined) throw new Error(`ENOENT ${e.path}`)
@@ -780,6 +781,124 @@ describe('the offer across restarts and peer messages (0.5.1)', () => {
     await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
     await $.tool.call({ tool: TOOL_ID, instructions: INSTRUCTIONS, checkpoint: CKPT } as never)
     expect((saved['session:s1'] as { checkpoint?: { path: string } }).checkpoint?.path).toBe(CKPT)
+  })
+})
+
+// 0.6: capture held across compactions. Before, the list was captured only while it sat within six user messages,
+// so from the second compaction on it survived only through the summary chain (docs/04, correction).
+describe('the pending list across several compactions (0.6)', () => {
+  const LIST = ASKING.split('\n').slice(2, 6).join('\n')
+  const READ = (i: number) => ({ role: 'user', text: `Read notes-${i}.md in full with the Read tool, then reply only with: read ${i}.`, toolUses: [] })
+  const DONE = (i: number) => ({ role: 'assistant', text: `read ${i}`, toolUses: [] })
+  const CONTINUED = { role: 'user', text: 'This session is being continued from a previous conversation that ran out of context.', toolUses: [] }
+  const store = (on: On, kept: Record<string, unknown> = {}) => {
+    const saved: Record<string, unknown> = { ...kept }
+    on('session.id', () => ({ value: 's1' }) as never)
+    on('store.get', (_, e) => ({ value: saved[e.key] }) as never)
+    on('store.set', (_, e) => {
+      saved[e.key] = e.value
+      return { value: undefined } as never
+    })
+    on('store.keys', () => ({ value: Object.keys(saved) }) as never)
+    on('store.delete', (_, e) => {
+      delete saved[e.key]
+      return { value: undefined } as never
+    })
+    return saved
+  }
+  test('supplied at every compaction until answered, once with the answer, then no more', async ($, on) => {
+    const { compactions } = engine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    // #1: the list is in the conversation.
+    await $.session.compact({ trigger: 'auto', messages: [{ role: 'assistant', text: ASKING, toolUses: [] }, READ(1), DONE(1), READ(2)] } as never)
+    // #2 and #3: only the summary and more reads remain; before 0.6, nothing was captured here.
+    await $.session.compact({ trigger: 'auto', messages: [CONTINUED, DONE(2), READ(3), DONE(3)] } as never)
+    await $.session.compact({ trigger: 'auto', messages: [CONTINUED, READ(4), DONE(4)] } as never)
+    // #4: the user answers; the answer rides with the list once.
+    await $.session.compact({ trigger: 'auto', messages: [CONTINUED, { role: 'user', text: 'Go with recs.', toolUses: [] }, { role: 'assistant', text: 'Applied the recs.', toolUses: [] }] } as never)
+    // #5: answered and recorded: the summary chain carries it from here.
+    await $.session.compact({ trigger: 'auto', messages: [CONTINUED, { role: 'user', text: 'Now fix the login bug.', toolUses: [] }] } as never)
+    const at = (n: number) => compactions[n]?.instructions ?? ''
+    for (const n of [0, 1, 2, 3]) expect([n, at(n).includes(LIST)]).toEqual([n, true])
+    expect(at(0)).not.toContain('captured before an earlier compaction')
+    for (const n of [1, 2, 3]) expect([n, at(n).includes('captured before an earlier compaction')]).toEqual([n, true])
+    expect(at(2)).toContain('Read notes-1.md in full') // the messages since, oldest first
+    expect(at(3)).toContain('"Go with recs."')
+    expect(at(4)).not.toContain(LIST)
+  })
+  test('a vetoed compaction holds nothing', async ($, on) => {
+    const { compactions } = engine(on, { skip: 'vetoed' })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.session.compact({ trigger: 'auto', messages: [{ role: 'assistant', text: ASKING, toolUses: [] }, READ(1)] } as never)
+    await $.session.compact({ trigger: 'auto', messages: [CONTINUED, READ(2)] } as never)
+    expect(compactions[1]?.instructions ?? '').not.toContain(LIST) // nothing stood, so nothing was held
+  })
+  test('held in the store, so a restart keeps it', async ($, on) => {
+    const { compactions } = engine(on)
+    const saved = store(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.session.compact({ trigger: 'auto', messages: [{ role: 'assistant', text: ASKING, toolUses: [] }, READ(1)] } as never)
+    expect((saved['session:s1'] as { ask?: { list?: string } }).ask?.list).toBe(LIST)
+    expect(compactions.length).toBe(1)
+  })
+  test('after a restart, the held list is supplied from the store', async ($, on) => {
+    const { compactions } = engine(on)
+    store(on, { 'session:s1': { ask: { list: LIST, replies: [], more: 0, capturedAt: new Date().toISOString() }, at: new Date().toISOString() } })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.session.compact({ trigger: 'auto', messages: [CONTINUED, READ(5)] } as never)
+    expect(compactions[0]?.instructions).toContain(LIST)
+    expect(compactions[0]?.instructions).toContain('captured before an earlier compaction')
+  })
+  test("a save's own compaction carries the held list too", async ($, on) => {
+    const { compactions, clock, runQueued } = engine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.session.compact({ trigger: 'auto', messages: [{ role: 'assistant', text: ASKING, toolUses: [] }, READ(1)] } as never)
+    await $.tool.call({ tool: TOOL_ID, instructions: INSTRUCTIONS, checkpoint: CKPT } as never)
+    await $.turn.complete(turnEnd('answer'))
+    await clock.advance(200)
+    await runQueued($ as never) // runs over SUMMARY: the list is no longer in the conversation
+    expect(compactions[1]?.instructions?.startsWith(INSTRUCTIONS)).toBe(true)
+    expect(compactions[1]?.instructions).toContain(LIST)
+  })
+  test('a subagent compaction neither uses nor changes the hold', async ($, on) => {
+    const { compactions } = engine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.session.compact({ trigger: 'auto', messages: [{ role: 'assistant', text: ASKING, toolUses: [] }, READ(1)] } as never)
+    await $.session.compact({ trigger: 'auto', agentId: 'a1', messages: [{ role: 'user', text: 'go with recs', toolUses: [] }] } as never)
+    await $.session.compact({ trigger: 'auto', messages: [CONTINUED, READ(2)] } as never)
+    expect(compactions[1]?.instructions ?? '').not.toContain(LIST)
+    expect(compactions[2]?.instructions).toContain(LIST)
+  })
+})
+
+describe('SMART_COMPACT_TRACE (0.6)', () => {
+  test("each main compaction's final instructions go to the folder", async ($, on) => {
+    engine(on, undefined, true, 1_000, FILES, undefined, { HOME: '/Users/x', SMART_COMPACT_TRACE: '/t/trace/' })
+    const written: Record<string, string> = {}
+    on('fs.write', (_, e) => {
+      written[e.path] = e.text
+      return { value: undefined }
+    })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.session.compact({ trigger: 'auto', messages: [{ role: 'assistant', text: ASKING, toolUses: [] }] } as never)
+    const files = Object.keys(written).filter(f => f.startsWith('/t/trace/')) // the compaction's own checkpoint is written too
+    expect(files.length).toBe(1)
+    expect(files[0]).toMatch(/^\/t\/trace\/\d{4}-.*-auto\.txt$/)
+    expect(written[files[0] ?? '']).toContain('stood: true\nheld: true')
+    expect(written[files[0] ?? '']).toContain('3. Add a cost ceiling per build? Rec: yes, 150 dollars.')
+  })
+})
+
+describe('the fork is given the held list (0.6)', () => {
+  test('a compaction checkpoint after the list left the conversation still names it', async ($, on) => {
+    const { forks, clock } = forkEngine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true } as never)
+    await $.session.compact({ trigger: 'auto', messages: ROWS } as never)
+    await clock.settle()
+    await $.session.compact({ trigger: 'auto', messages: [{ role: 'user', text: 'This session is being continued from a previous conversation.', toolUses: [] }, { role: 'user', text: 'Read the logs.', toolUses: [] }] } as never)
+    await clock.settle()
+    expect(forks.length).toBe(2)
+    expect(forks[1]).toContain('3. Add a cost ceiling per build? Rec: yes, 150 dollars.')
   })
 })
 

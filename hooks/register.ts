@@ -3,8 +3,8 @@ import { autoName, carryDropped, CHECKPOINT_NAME, composeCheckpoint, dirtyFiles,
 import type { AutoInput, DiskFacts } from './autockpt'
 import { estimateDetails, estimateLine, estimateOf, fmtK, isRead, measureTarget, parseCheckpoint, reattachedFromTranscript, readTarget, tokensOf } from './estimate'
 import type { Estimate, Manifest, Measured } from './estimate'
-import { askInstruction, boundarySince, carryForwardGaps, contractFrom, nudgeThreshold, pendingAsk, pointerLine, PROFILE_PATH, sectionText, suggestBand, suggestionNote, suggestReason, unquotedAnswers, withContract } from './ledger'
-import type { Row } from './ledger'
+import { askInstruction, boundarySince, carryForwardGaps, contractFrom, nextAsk, nudgeThreshold, pointerLine, PROFILE_PATH, sectionText, suggestBand, suggestionNote, suggestReason, unquotedAnswers, withContract } from './ledger'
+import type { HeldAsk, PendingAsk, Row } from './ledger'
 
 // smart-compact's hooks module. /smart-compact:save writes a checkpoint, then
 // calls this module's tool instead of asking the person to paste /compact. The
@@ -183,7 +183,7 @@ type Env = { home?: string; cwd?: string; profilePath?: string; transcriptPath?:
  * delivered, and the latest checkpoint's pointer. Seen 2026-11-05: the offer
  * came twice with no compaction between, in two desktop sessions.
  */
-type SessionRecord = { offered?: boolean; note?: string; checkpoint?: { path: string; savedAt: string }; at?: string }
+type SessionRecord = { offered?: boolean; note?: string; checkpoint?: { path: string; savedAt: string }; ask?: HeldAsk; at?: string }
 const RECORD_DAYS = 14
 
 async function loadRecord($: Dollar, id: string | undefined): Promise<SessionRecord | undefined> {
@@ -323,7 +323,7 @@ async function gatherFacts($: Dollar, rows: readonly Row[], env: Env): Promise<D
  * own version is written first, so the summary's pointer always leads to a
  * file, then a fork of the main thread writes the real one alongside the summary.
  */
-async function startAuto($: Dollar, rows: readonly Row[], trigger: string, env: Env): Promise<AutoRun | undefined> {
+async function startAuto($: Dollar, rows: readonly Row[], trigger: string, env: Env, ask: PendingAsk | undefined): Promise<AutoRun | undefined> {
   const { home, profilePath, transcriptPath } = env
   const facts = await gatherFacts($, rows, env)
   if (facts === undefined) return undefined
@@ -343,7 +343,7 @@ async function startAuto($: Dollar, rows: readonly Row[], trigger: string, env: 
     trigger,
     facts,
     previous: prevPath === undefined || prevText === undefined ? undefined : { path: prevPath, text: prevText },
-    ask: pendingAsk(rows),
+    ask,
     template,
     writeSteps: skill === undefined ? undefined : writeStepsFrom(skill),
     profileSave: profile === undefined ? undefined : sectionText(profile, 'save'),
@@ -479,6 +479,10 @@ export const register: Register = (on, options) => {
   let precomputed: { run: AutoRun; seen: number } | undefined
   /** The session transcript's path, from any classic hook event. */
   let transcriptPath: string | undefined
+  /** The pending ask held across compactions until the user answers it (0.6); kept in the session's record. */
+  let heldAsk: HeldAsk | undefined
+  /** SMART_COMPACT_TRACE: a folder that gets each main compaction's final instructions, for end-to-end checks. Off when unset. */
+  let traceDir: string | undefined
 
   on('session.start', async ($, e, next) => {
     cwd = typeof e.cwd === 'string' ? e.cwd : undefined
@@ -486,6 +490,8 @@ export const register: Register = (on, options) => {
       home = await $.env.get('HOME')
       const override = await $.env.get('SMART_COMPACT_PROFILE')
       profilePath = override !== undefined && override !== '' ? override : home === undefined ? undefined : `${home}/${PROFILE_PATH}`
+      const trace = await $.env.get('SMART_COMPACT_TRACE')
+      traceDir = trace !== undefined && trace.startsWith('/') ? trace.replace(/\/$/, '') : undefined
     } catch {
       home = undefined
       profilePath = undefined
@@ -500,6 +506,7 @@ export const register: Register = (on, options) => {
       isNudged = kept.offered === true
       note = kept.note
       lastCheckpoint = kept.checkpoint ?? lastCheckpoint
+      heldAsk = kept.ask ?? heldAsk
     }
     void pruneRecords($)
     await $.tool.register({
@@ -579,7 +586,7 @@ export const register: Register = (on, options) => {
       queued = { ...request } // unreadable checkpoint or manifest: compact without the estimate
       lastCheckpoint = { path: request.checkpoint, savedAt: new Date().toISOString() }
     }
-    await saveRecord($, sessionId, { offered: isNudged, note, checkpoint: lastCheckpoint })
+    await saveRecord($, sessionId, { offered: isNudged, note, checkpoint: lastCheckpoint, ask: heldAsk })
     // One /compact at a time. A save while an earlier one waits to run would compact the fresh summary again
     // (seen 2026-11-04: a /smart-compact:save typed during an automatic save ran right after it).
     if (expecting !== undefined) {
@@ -613,13 +620,15 @@ export const register: Register = (on, options) => {
     // A compaction the plugin did not start gets a checkpoint of its own. A pasted save line already names one.
     const isPastedSave = e.trigger === 'manual' && /CHECKPOINT: \S+\.ckpt\.md/.test(e.instructions ?? '')
     const rows = e.messages as unknown as readonly Row[]
+    // The newest pending ask, or the one held from an earlier compaction until the user answers it.
+    const decided = isMain ? nextAsk(rows, heldAsk, new Date()) : undefined
     let auto: AutoRun | undefined
     if (isMain && !isOurs && !isPastedSave && isAutoCheckpointOn) {
       if (e.trigger !== 'precompute' && precomputed !== undefined) {
         auto = precomputed.run // its summary, computed in the background, is what installs now
       } else {
         try {
-          auto = await startAuto($, rows, e.trigger, { home, cwd, profilePath, transcriptPath })
+          auto = await startAuto($, rows, e.trigger, { home, cwd, profilePath, transcriptPath }, decided?.use)
           if (auto !== undefined) lastCheckpoint = { path: auto.input.path, savedAt: auto.input.createdAt }
         } catch (err) {
           $.ui.log(`smart-compact: no checkpoint for this compaction (${errorText(err)}).`)
@@ -629,7 +638,7 @@ export const register: Register = (on, options) => {
       }
     }
     if (isContractOn && e.agentId === undefined) {
-      const ask = pendingAsk(e.messages as unknown as readonly Row[])
+      const ask = decided?.use
       let profile: string | undefined
       try {
         profile = profilePath === undefined ? undefined : await $.fs.read(profilePath)
@@ -643,11 +652,20 @@ export const register: Register = (on, options) => {
       event = { ...event, instructions: [event.instructions, pointer].filter(x => x !== undefined && x.trim() !== '').join('\n\n') }
     }
     const result = await next(event)
+    if (traceDir !== undefined && isMain) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      await $.fs
+        .write(`${traceDir}/${stamp}-${e.trigger}.txt`, `trigger: ${e.trigger}\nstood: ${result.skip === undefined}\nheld: ${decided?.hold !== undefined}\n\n${event.instructions ?? ''}\n`)
+        .catch(() => undefined)
+    }
+    // Held only once a compaction stood: a vetoed one supplied nothing.
+    if (decided !== undefined && result.skip === undefined) heldAsk = decided.hold
+    if (isMain && e.trigger === 'precompute' && result.skip === undefined) void saveRecord($, sessionId, { offered: isNudged, note, checkpoint: lastCheckpoint, ask: heldAsk })
     if (isMain && e.trigger !== 'precompute' && result.skip === undefined) {
       isNudged = false
       note = undefined
       compactions += 1
-      void saveRecord($, sessionId, { offered: false, checkpoint: lastCheckpoint })
+      void saveRecord($, sessionId, { offered: false, checkpoint: lastCheckpoint, ask: heldAsk })
       if (!isOurs && pending !== undefined) {
         // Claude Code compacted while a save's turn ran: the save's checkpoint stands, and its /compact must not follow.
         pending = undefined
@@ -699,7 +717,7 @@ export const register: Register = (on, options) => {
     if (lastPromptKind !== undefined && !USER_PROMPTS.has(lastPromptKind)) return result
     const extra = note
     note = undefined
-    await saveRecord($, sessionId, { offered: true, checkpoint: lastCheckpoint })
+    await saveRecord($, sessionId, { offered: true, checkpoint: lastCheckpoint, ask: heldAsk })
     if (/^\s*\/smart-compact:/.test(String((e as { prompt?: unknown }).prompt ?? ''))) return result
     return { ...result, additionalContext: [...(result?.additionalContext ?? []), extra] }
   }).catch(($, e, next) => next(e))
@@ -746,7 +764,7 @@ export const register: Register = (on, options) => {
           if (reason === undefined) return answered
           isNudged = true
           note = suggestionNote(context.tokens, reason, band, autoRehydrate !== 'off')
-          await saveRecord($, sessionId, { offered: true, note, checkpoint: lastCheckpoint })
+          await saveRecord($, sessionId, { offered: true, note, checkpoint: lastCheckpoint, ask: heldAsk })
           $.ui.log(
             `smart-compact: context is at ≈${fmtK(context.tokens)} tokens, ${context.tokens > band.to ? 'past the top of' : 'inside'} your ${fmtK(band.from)}–${fmtK(band.to)} band` +
               (reason === 'boundary' ? ', right after a round closed' : '') +
@@ -760,7 +778,7 @@ export const register: Register = (on, options) => {
         if (context.tokens >= threshold) {
           isNudged = true
           note = suggestionNote(context.tokens, 'point', undefined, autoRehydrate !== 'off')
-          await saveRecord($, sessionId, { offered: true, note, checkpoint: lastCheckpoint })
+          await saveRecord($, sessionId, { offered: true, note, checkpoint: lastCheckpoint, ask: heldAsk })
           $.ui.log(
             `smart-compact: context is at ≈${fmtK(context.tokens)} tokens (${Math.round((100 * context.tokens) / context.window)}% of the window). ` +
               `/smart-compact:save checkpoints this session and compacts it; ${after}.`,

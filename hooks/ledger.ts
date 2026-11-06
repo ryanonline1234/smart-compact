@@ -194,7 +194,19 @@ export type Row = {
   /** `text` (or `result`) once the call has returned; both absent while it is in flight. */
   toolUses?: readonly { tool: string; input?: Record<string, unknown>; text?: string; result?: unknown }[]
 }
-export type PendingAsk = { list?: string; buttons?: string; answer?: string }
+export type PendingAsk = {
+  list?: string
+  buttons?: string
+  /** The user's reply: the first message after the ask, or (with `replies`) the first one that answers it. */
+  answer?: string
+  /** The user's messages since the ask, oldest first: the first three. */
+  replies?: string[]
+  /** How many more messages came after those three, and the newest of them. */
+  more?: number
+  latest?: string
+  /** Held from before an earlier compaction: the ask itself is no longer in the conversation. */
+  isCarried?: boolean
+}
 
 const NUMBERED = /^\s*(?:\*\*)?\d{1,2}[.)]/
 const ASKS = /\?|\brec(?:s|ommend\w*)?\b/i
@@ -280,11 +292,146 @@ export function pendingAsk(rows: readonly Row[], maxUserTurns = 6): PendingAsk |
 
 /** The compaction instruction that keeps a pending ask verbatim. */
 export function askInstruction(ask: PendingAsk): string {
-  const parts = ['The latest decision put to the user, which a reply like "go with recs" answers. The summary must quote it verbatim:']
+  const parts = [
+    ask.isCarried === true
+      ? 'The latest decision put to the user, captured before an earlier compaction (it is no longer in the conversation above), which a reply like "go with recs" answers. The summary must quote it verbatim, and record the answer if the messages since give one:'
+      : 'The latest decision put to the user, which a reply like "go with recs" answers. The summary must quote it verbatim:',
+  ]
   if (ask.list !== undefined) parts.push(ask.list)
   if (ask.buttons !== undefined) parts.push(`Asked with buttons: ${ask.buttons}`)
-  parts.push(ask.answer === undefined ? 'Not answered yet.' : `The user's reply, verbatim: "${ask.answer}"`)
+  const replies = ask.replies ?? (ask.answer === undefined ? [] : [ask.answer])
+  const more = ask.more ?? 0
+  if (replies.length === 0) parts.push('Not answered yet.')
+  else if (replies.length === 1 && more === 0) parts.push(`The user's reply, verbatim: "${replies[0]}"`)
+  else {
+    const tail = more === 0 ? '' : ask.latest === undefined ? ` (and ${more} more)` : ` (and ${more} more, the newest: "${ask.latest}")`
+    parts.push(`The user's messages since it was asked, verbatim, oldest first: ${replies.map(r => `"${r}"`).join('; ')}${tail}.`)
+  }
+  if (ask.replies !== undefined && ask.answer !== undefined && !replies.includes(ask.answer) && ask.answer !== ask.latest) parts.push(`The message that answers it, verbatim: "${ask.answer}"`)
   return parts.join('\n')
+}
+
+// ---------------------------------------------------------------- the pending ask, held across compactions (0.6)
+
+/**
+ * A pending ask the plugin keeps (in $.store) until the user answers it, so it is
+ * supplied at every compaction, not only while it sits within six user messages.
+ * Measured 2026-11-05 (docs/04): after the first compaction nothing new was
+ * captured, and the list survived only through the summary chain.
+ */
+export type HeldAsk = {
+  list?: string
+  buttons?: string
+  replies: string[]
+  more: number
+  latest?: string
+  capturedAt: string
+  /** The newest user message seen when last held: the messages after it are new. */
+  lastSeen?: string
+}
+
+const KEEP_REPLIES = 3
+const HOLD_DAYS = 7
+/** Messages without an answer after which the user has moved on. */
+const HOLD_MESSAGES = 20
+const REPLY_CHARS = 400
+
+/** A message the user wrote: not a command, a hook's or skill's text, or a compaction summary. */
+export function isOwnText(text: string): boolean {
+  const t = text.trim()
+  return t !== '' && !t.startsWith('<') && !t.startsWith('Base directory for this skill') && !t.startsWith('This session is being continued') && !t.startsWith('[Request interrupted')
+}
+
+const APPROVES =
+  /^\s*(?:go with (?:the |your |my |all )?(?:recs?|recommendations?)\b|go ahead\b|yes\b|yep\b|yeah\b|sure\b|ok(?:ay)?\b|do it\b|ship it\b|approved?\b|sounds good\b|lgtm\b|proceed\b|no\b|nope\b|not now\b|not yet\b|skip\b|neither\b|both\b|all (?:of them|three|four|five)\b)/i
+/** "Build 1 and 2", "Plan option 2", "#1 only", "2 and 3": a reply that picks items by number. */
+const PICKS = /^\s*(?:(?:go with|do|build|take|pick|choose|plan|option|ship|merge|yes(?: to)?|no(?: to)?|skip)\s+)*(?:option\s+|#)?\d{1,2}(?:\s*(?:,|and|&|\+)\s*#?\d{1,2})*\b(?![.,]\d)/i
+
+/** Whether a message settles the ask: an approval, a button's label, or a pick by number. Free text does not count. */
+export function isAnswer(reply: string, ask: Pick<PendingAsk, 'buttons'>): boolean {
+  const t = reply.trim()
+  if (APPROVES.test(t) || PICKS.test(t)) return true
+  const said = t.toLowerCase().replace(/[.!\s]+$/, '')
+  const labels = [...(ask.buttons ?? '').matchAll(/"([^"]+)"/g)].map(m => (m[1] ?? '').toLowerCase().trim()).filter(l => l !== '')
+  return labels.some(l => said === l || said.startsWith(`${l} `) || said.startsWith(`${l},`))
+}
+
+const clip = (s: string) => s.trim().slice(0, REPLY_CHARS)
+
+/** The newest ask anywhere in the rows, with every message the user wrote after it. */
+function newestAsk(rows: readonly Row[]): { list?: string; buttons?: string; replies: string[] } | undefined {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i]
+    if (row === undefined || row.role !== 'assistant') continue
+    const list = row.text.trim() === '' ? undefined : extractList(row.text)
+    const buttons = toolAsk(row.toolUses)
+    if (list === undefined && buttons === undefined) continue
+    const replies = rows.slice(i + 1).filter(r => r.role === 'user' && isOwnText(r.text)).map(r => clip(r.text))
+    return { list, buttons, replies }
+  }
+  return undefined
+}
+
+function lastOwn(rows: readonly Row[]): string | undefined {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]
+    if (r !== undefined && r.role === 'user' && isOwnText(r.text)) return clip(r.text)
+  }
+  return undefined
+}
+
+/** The user's messages in rows that the hold has not seen: after its lastSeen message when that was kept verbatim, else after the summary. */
+function newSince(rows: readonly Row[], lastSeen: string | undefined): string[] {
+  const own = (from: number) => rows.slice(from).filter(r => r.role === 'user' && isOwnText(r.text)).map(r => clip(r.text))
+  let start = 0
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]
+    if (r !== undefined && r.role === 'user' && r.text.trimStart().startsWith('This session is being continued')) {
+      start = i + 1
+      break
+    }
+  }
+  if (lastSeen !== undefined) {
+    const seen = rows.findIndex((r, i) => i >= start && r.role === 'user' && clip(r.text) === lastSeen)
+    if (seen !== -1) return own(seen + 1)
+  }
+  return own(start)
+}
+
+/**
+ * Which pending ask a compaction supplies, and what is held for the next one.
+ * - The newest ask in the conversation wins: supplied while recent (six messages) or unanswered, held while unanswered.
+ * - With none in the conversation, the held one is supplied, marked as carried, with the messages since.
+ * - An answer is supplied once with its ask; then the hold ends and the summary chain carries the outcome.
+ * - A hold also ends after HOLD_DAYS, or HOLD_MESSAGES messages without an answer.
+ */
+export function nextAsk(rows: readonly Row[], held: HeldAsk | undefined, now: Date): { use?: PendingAsk; hold?: HeldAsk } {
+  const fresh = newestAsk(rows)
+  if (fresh !== undefined) {
+    const answer = fresh.replies.find(r => isAnswer(r, fresh))
+    const replies = fresh.replies.slice(0, KEEP_REPLIES)
+    const more = fresh.replies.length - replies.length
+    const latest = more > 0 ? fresh.replies[fresh.replies.length - 1] : undefined
+    const isRecent = fresh.replies.length <= 6
+    const use: PendingAsk | undefined = isRecent || answer === undefined ? { list: fresh.list, buttons: fresh.buttons, answer, replies, more, latest } : undefined
+    const isSame = held !== undefined && held.list === fresh.list && held.buttons === fresh.buttons
+    const hold: HeldAsk | undefined =
+      answer !== undefined
+        ? undefined
+        : { list: fresh.list, buttons: fresh.buttons, replies, more, latest, capturedAt: isSame && held !== undefined ? held.capturedAt : now.toISOString(), lastSeen: lastOwn(rows) }
+    return { use, hold }
+  }
+  if (held === undefined) return { use: undefined, hold: undefined }
+  const since = newSince(rows, held.lastSeen)
+  const all = [...held.replies, ...since]
+  const replies = all.slice(0, KEEP_REPLIES)
+  const more = held.more + all.length - replies.length
+  const isExpired = now.getTime() - Date.parse(held.capturedAt) > HOLD_DAYS * 86_400_000 || replies.length + more > HOLD_MESSAGES
+  if (isExpired) return { use: undefined, hold: undefined }
+  const latest = more === 0 ? undefined : (since[since.length - 1] ?? held.latest)
+  const answer = since.find(r => isAnswer(r, held))
+  const use: PendingAsk = { list: held.list, buttons: held.buttons, answer, replies, more, latest, isCarried: true }
+  return { use, hold: answer !== undefined ? undefined : { ...held, replies, more, latest, lastSeen: lastOwn(rows) ?? held.lastSeen } }
 }
 
 // ---------------------------------------------------------------- the save suggestion in a band
