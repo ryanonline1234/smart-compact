@@ -2,7 +2,7 @@
 
 **Version:** 0.5.1 on local branch `long-horizon`, **committed locally, not pushed**. 0.4.0 (checkpoints at Claude Code's own compactions), plus 0.5.0's manual-save fixes and settings (a save band the model offers, `autoRehydrate`), plus 0.5.1: the fork retuned and re-gated, and the save offer made restart-proof. Public `main` (github.com/ryanonline1234/smart-compact, site smart-compact.vercel.app) is still 0.1.0.
 
-**Installed for the author:** loaded from this working copy via `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json`. Options under `pluginConfigs["smart-compact@inline"]`: `suggestFrom: 600000`, `suggestTo: 700000`, `autoRehydrate: "always"`; `checkpointOnCompact` on by default. Backups: `settings.json.pre-smart-compact-0.2.bak`, `.pre-autosave.bak`, `.pre-retire-autosave.bak`, `.pre-0.5-settings.bak`. Profile: `~/.claude/smart-compact/profile.md`. A/B results live in `~/smart-compact-runs/` (outside any worktree).
+**Installed for the author:** a snapshot at `~/.claude/smart-compact/plugin`, outside this checkout, made by `scripts/install-live.sh [ref]` (default `long-horizon`; `.snapshot` there names the commit). `CLAUDE_CODE_PLUGIN_DIRS` in `~/.claude/settings.json` points at it. Options under `pluginConfigs["smart-compact@inline"]`: `suggestFrom: 600000`, `suggestTo: 700000`, `autoRehydrate: "always"`. **Merging is no longer deploying:** run the script after a merge to go live. Settings backups: `.pre-smart-compact-0.2.bak`, `.pre-autosave.bak`, `.pre-retire-autosave.bak`, `.pre-0.5-settings.bak`, `.pre-live-snapshot.bak`. Profile: `~/.claude/smart-compact/profile.md`. A/B results: `~/smart-compact-runs/`.
 
 **How it behaves now:**
 - **Inside 600k–700k**, Claude offers `/smart-compact:save` in its next reply, at the first turn end after a commit, merge, deploy or state-file write, or at 700k at the latest. The band stays below 90% of the session's own compaction point.
@@ -34,6 +34,6 @@
 
 **Not verified end to end:** a fork-written checkpoint in a real session; the precompute path; `autoRehydrate always` after an engine compaction (unit tests only).
 
-**Next:** watch the first 600k–700k offer and the automatic rehydrates in a real session. A likely cause of restarts: an interactive session hot-reloads its `CLAUDE_CODE_PLUGIN_DIRS` folder, and worktree commits write into `~/smart-compact/.git`. Not measurable in `-p`. A hot reload while a fork writes a checkpoint loses that fork, so moving the live install to a snapshot folder outside the git working copy is proposed. Later: decide whether to push to the public repo and update the site (it describes 0.1).
+**Next:** watch the first 600k–700k offer and the automatic rehydrates in a real session. The live install moved to a snapshot outside the checkout on 2026-11-05: sessions opened before the move still load from `~/smart-compact` and keep hot-reloading on its commits until they are reopened. Later: decide whether to push to the public repo and update the site (it describes 0.1).
 
 **Ideas, not started:** measure CJK; measure Fable 5.1's tokenizer; `claude plugin eval` graders for the skill's behavior.

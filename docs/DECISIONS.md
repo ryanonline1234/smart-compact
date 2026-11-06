@@ -79,3 +79,8 @@ Append-only. Each entry: the decision, then why.
 - **The note is delivered only with the user's own prompt** (origin composer, sdk or bridge): it once arrived with a cross-session message. Past the band's top, the note says "past the top of".
 - **Coordination with the side session** (local_aca6ee56, novelty report, branches `presentation` and `placement-exp`): disjoint files, its commits held during the gate, its README and docs/03 numbers refreshed from this gate.
 
+## 2026-11-05 (the live install moves to a snapshot)
+
+- **The live plugin is a snapshot of one commit at `~/.claude/smart-compact/plugin`, refreshed by `scripts/install-live.sh`,** not this git checkout (Ryan: "Yes, move it"). The docs say an interactive session hot-reloads the folder it loads a plugin from, and a reload starts the hooks module over, losing timers and any fork writing a checkpoint. Every commit, worktree and rebase writes into the checkout's `.git`, and two sessions were committing all day. The script syncs by checksum, so an update writes only changed files.
+- **Not in `~/.claude/mods`,** which loads on its own, so the plugin would load twice. **Merging is no longer deploying:** going live is a deliberate run of the script.
+
