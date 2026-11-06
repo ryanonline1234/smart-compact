@@ -17,6 +17,9 @@
          same scripted session twice, one arm saving by hand near the point,
          the other letting Claude Code compact and the plugin's fork write the
          checkpoint. Both are graded on the same rubric; --runs N pairs.
+  persist  docs/06: is the held pending list supplied at every compaction? 0.5.1
+         (SC_BASE_DIR, an archived copy) against this build, three or more
+         automatic compactions, then "Go with recs." judged blind; --runs N.
 
 Usage:
     python3 scripts/e2e_long.py [--scenario auto|saves|double|ab|settings|all] [--runs N] [--model claude-sonnet-5-5] [--claude PATH]
@@ -629,9 +632,148 @@ def run_ab(claude: str, model: str, root: Path, runs: int, arms: tuple[str, ...]
             "judge_fork_minus_manual_sum": {k: sum(d[k] for d in diffs) for k in DIMENSIONS} if diffs else None}
 
 
+# ---------------------------------------------------------------- persist (docs/06)
+
+RESOLVE = """You are grading one reply in a Claude Code session. Early on, the assistant asked the user three numbered questions, each with a recommendation:
+
+{questions}
+
+Much later, after several context compactions, the user wrote exactly: "Go with recs."
+
+Below is everything the assistant did in reply: its text and its tool calls.
+
+=== REPLY ===
+{reply}
+
+For each of the three recommendations, did the reply act on it? It counts when the reply carries it out or says it is applying that specific recommendation; paraphrase is fine. It does not count when the reply applies something else, applies a different list, or asks which recommendations are meant.
+Answer with only a JSON object:
+{{"acted_on": [true|false, true|false, true|false], "asked_which": true|false, "wrong_list": true|false, "why": "one sentence"}}"""
+
+CARRIED = "captured before an earlier compaction"
+
+
+def summaries_of(rows: list[dict]) -> list[str]:
+    out = []
+    for r in rows:
+        if r.get("isCompactSummary"):
+            c = r["message"]["content"]
+            out.append(c if isinstance(c, str) else "".join(x.get("text", "") for x in c if isinstance(x, dict)))
+    return out
+
+
+def reply_to(rows: list[dict], said: str) -> str:
+    """The assistant's text and tool calls after the user's last message `said`, from Claude Code's transcript."""
+    def text(r: dict) -> str:
+        c = (r.get("message") or {}).get("content")
+        return c if isinstance(c, str) else "".join(b.get("text", "") for b in c or [] if isinstance(b, dict) and b.get("type") == "text")
+
+    start = max((i for i, r in enumerate(rows) if r.get("type") == "user" and text(r).strip() == said), default=-1)
+    out = []
+    for r in rows[start + 1:] if start >= 0 else []:
+        content = (r.get("message") or {}).get("content") if r.get("type") == "assistant" else None
+        for b in content or []:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "text" and b.get("text", "").strip():
+                out.append(f"ASSISTANT: {b['text'].strip()[:2000]}")
+            elif b.get("type") == "tool_use":
+                inp = b.get("input") or {}
+                what = inp.get("file_path") or inp.get("pattern") or ""
+                body = inp.get("content") or inp.get("new_string") or ""
+                out.append(f"TOOL CALL: {b.get('name')} {what} {str(body)[:300]}".rstrip())
+    return "\n\n".join(out)[:12_000]
+
+
+def judge_resolve(claude: str, questions: list[str], reply: str) -> dict:
+    prompt = RESOLVE.format(questions="\n".join(questions), reply=reply or "(no reply)")
+    with tempfile.TemporaryDirectory() as scratch:
+        r = subprocess.run([claude, "-p", "--safe-mode", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--model", "claude-opus-5-5", "--output-format", "json"],
+                           input=prompt, cwd=scratch, env={**os.environ, **BASE_ENV}, capture_output=True, text=True, timeout=600)
+    try:
+        text = json.loads(r.stdout).get("result", "")
+        return json.loads(re.search(r"\{[\s\S]*\}", text).group(0))
+    except Exception as err:  # noqa: BLE001 — report, don't crash the gate
+        return {"error": f"{err}: {r.stdout[:200]} {r.stderr[:200]}"}
+
+
+def run_persist_arm(claude: str, model: str, arm: str, plugin: Path, root: Path, out: dict) -> None:
+    proj = root / f"persist-{arm}"
+    proj.mkdir(parents=True)
+    for i in range(1, 25):
+        (proj / f"notes-{i}.md").write_text("\n".join(f"Note {i}.{j}: {NOTE * 3}" for j in range(90)))
+    trace = OUT / f"persist-trace-{arm}-{root.name}-{RUN_TAG}"
+    trace.mkdir(parents=True, exist_ok=True)
+    opts = {"suggestAt": -1, "checkpointOnCompact": False}
+    env = {**BASE_ENV, "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "100000", "SMART_COMPACT_TRACE": str(trace)}
+    extra = ["--plugin-dir", str(plugin), "--allowedTools", "Read,Write,Edit,Glob", "--settings", json.dumps({"pluginConfigs": {"smart-compact@inline": {"options": opts}}})]
+    log = OUT / f"persist-{arm}-{root.name}-{time.strftime('%H%M%S')}.jsonl"
+    s = Session(claude, proj, model, log, extra, env)
+    s.turn("Two standing rules for this project, from now on: you test your own work and never ask me to test; never push or deploy without my explicit OK. Reply only with: noted.")
+    s.turn("Before we start, ask me exactly three numbered questions about how to organise the notes in this folder, each followed by your recommendation, in the form 'N. <question>? Rec: <recommendation>.' Do not read any files yet.")
+    asked = next((t for t in assistant_texts(read_log(log)) if re.search(r"^\s*\**1\.", t, re.M) and "Rec" in t), "")
+    questions = [l.strip() for l in asked.splitlines() if re.match(r"^\s*\**\d\.", l)][:3]
+    count = lambda: sum(1 for r in read_log(log) if r.get("subtype") == "compact_boundary")
+    i = 1
+    while count() < 3 and i < 24:
+        s.turn(f"Read notes-{i}.md and notes-{i + 1}.md in full with the Read tool, then reply only with: read {i} and {i + 1}.", timeout=420)
+        i += 2
+    before = count()
+    s.mark("go with recs")
+    s.turn("Go with recs.", timeout=600)
+    s.close()
+    rows = transcript_rows(log)
+    traced = [t.read_text() for t in sorted(trace.glob("*.txt"))]
+    sums = summaries_of(rows)
+    last = sums[before - 1] if 0 < before <= len(sums) else ""
+    verdict = judge_resolve(claude, questions, reply_to(rows, "Go with recs."))
+    acted = verdict.get("acted_on") if isinstance(verdict.get("acted_on"), list) else []
+    out[arm] = {
+        "compactions_before_answer": before,
+        "compactions_total": count(),
+        "traces": len(traced),
+        "valid": before >= 3 and len(questions) == 3 and (arm != "persist" or len(traced) >= before),
+        "delivered_per_compaction": [verbatim_lines(questions, t) for t in traced[:before]],
+        "carried_marker_per_compaction": [CARRIED in t for t in traced[:before]],
+        "verbatim_per_summary": [verbatim_lines(questions, x) for x in sums[:before]],
+        "verbatim_last_summary": verbatim_lines(questions, last),
+        "rules_in_last_summary": words_hit("never ask me to test", last, 4) and words_hit("never push or deploy without", last, 4),
+        "resolved": len(acted) == 3 and all(acted) and not verdict.get("asked_which") and not verdict.get("wrong_list"),
+        "judge": verdict,
+        "questions": questions,
+        "log": str(log),
+        "trace": str(trace),
+    }
+
+
+def run_persist(claude: str, model: str, root: Path, runs: int) -> dict:
+    """docs/06: base (0.5.1, SC_BASE_DIR) against persist (this checkout, or SC_PLUGIN_DIR), the arms of a run side by side."""
+    base = Path(os.environ["SC_BASE_DIR"])
+    results = []
+    for n in range(1, runs + 1):
+        out: dict = {}
+        threads = [threading.Thread(target=run_persist_arm, args=(claude, model, arm, plugin, root / f"run{n}", out)) for arm, plugin in (("base", base), ("persist", REPO))]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        results.append({"run": n, **out})
+        print(json.dumps({"run": n, **{a: {k: v for k, v in d.items() if k not in ("questions", "judge")} for a, d in out.items()}}, indent=1), flush=True)
+    valid = lambda arm: [r[arm] for r in results if r.get(arm, {}).get("valid")]
+    persist_ok = [all(d == 3 for d in r["delivered_per_compaction"]) and all(r["carried_marker_per_compaction"][1:]) and not r["carried_marker_per_compaction"][0] for r in valid("persist")]
+    tally = {
+        "valid": {arm: len(valid(arm)) for arm in ("base", "persist")},
+        "persist_delivered_every_compaction": sum(persist_ok),
+        "verbatim_last_summary": {arm: sum(r["verbatim_last_summary"] for r in valid(arm)) for arm in ("base", "persist")},
+        "rules_in_last_summary": {arm: sum(1 for r in valid(arm) if r["rules_in_last_summary"]) for arm in ("base", "persist")},
+        "resolved": {arm: sum(1 for r in valid(arm) if r["resolved"]) for arm in ("base", "persist")},
+    }
+    (OUT / f"persist-{RUN_TAG}.json").write_text(json.dumps({"runs": results, "tally": tally}, indent=1))
+    return {"runs": runs, "tally": tally}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--scenario", choices=["auto", "saves", "double", "ab", "settings", "both", "all"], default="all")
+    parser.add_argument("--scenario", choices=["auto", "saves", "double", "ab", "settings", "persist", "both", "all"], default="all")
     parser.add_argument("--model", default="claude-sonnet-5-5")
     parser.add_argument("--claude")
     parser.add_argument("--runs", type=int, default=3)
@@ -645,6 +787,8 @@ def main() -> None:
             print(json.dumps({"saves": run_saves(claude, args.model, root)}, indent=1), flush=True)
         if args.scenario == "settings":
             print(json.dumps({"settings": run_settings(claude, args.model, root)}, indent=1), flush=True)
+        if args.scenario == "persist":
+            print(json.dumps({"persist": run_persist(claude, args.model, root, args.runs)}, indent=1), flush=True)
         if args.scenario == "ab":
             print(json.dumps({"ab": run_ab(claude, args.model, root, args.runs, tuple(args.arms.split(",")))}, indent=1), flush=True)
         if args.scenario in ("double", "all"):
