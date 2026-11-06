@@ -140,7 +140,12 @@ footer { padding: 40px var(--margin) 56px; display: flex; flex-wrap: wrap; justi
   .leaders { display: none; }
   .two { grid-template-columns: 1fr; }
   .ledger .wide { display: none; }
+  .ledger th, .ledger td { padding: 8px 6px; }
   .section { padding: 72px var(--margin); }
+  /* Phone width: each term above its text, so long terms and words never push past the screen. */
+  .rows { grid-template-columns: minmax(0, 1fr); }
+  .rows dt { padding: 10px 0 0; }
+  .rows dd { border-top: 0; padding-top: 4px; overflow-wrap: anywhere; }
 }
 /* Reduced motion: a static, complete page. No sticky stage, no scrub, no transitions. */
 .static .stage { height: auto; }
@@ -157,7 +162,7 @@ footer { padding: 40px var(--margin) 56px; display: flex; flex-wrap: wrap; justi
 
 <main>
 <section class="hero wrap" data-scene="hero" data-ground="a">
-  <div class="kicker">A Claude Code plugin · v0.5.1</div>
+  <div class="kicker">A Claude Code plugin · v0.6.0</div>
   <h1 data-motion="hero-claim">Compact without forgetting.</h1>
   <p class="lede">Compaction keeps one summary. smart-compact makes sure your standing rules and open decisions are in it, checks each checkpoint against the last, and measures what rehydrating would cost before anything is wiped.</p>
   <div class="cmd"><code>claude plugin marketplace add ryanonline1234/smart-compact</code><button type="button" data-copy="claude plugin marketplace add ryanonline1234/smart-compact">Copy</button></div>
@@ -200,7 +205,7 @@ footer { padding: 40px var(--margin) 56px; display: flex; flex-wrap: wrap; justi
   </div>
   <dl class="rows">
     <dt>Every compaction</dt><dd>A summary contract rides on each one, Claude Code's own included: standing rules, open decisions with their recommendations verbatim, approvals with their conditions. In a forced automatic compaction it kept all three open questions in 3 of 3 runs; without it, none, in 3 of 3.</dd>
-    <dt>The pending list</dt><dd>The newest numbered list that asks something is captured mechanically and quoted into the compaction instructions word for word, so "go with recs" still points at it.</dd>
+    <dt>The pending list</dt><dd>The newest numbered list that asks something is captured mechanically and held until you answer it, so every compaction quotes it word for word and "go with recs" still points at it. In a test with three automatic compactions, it reached each one in 3 of 3 runs.</dd>
     <dt>Carry-forward guard</dt><dd>A new checkpoint that silently drops a rule or open decision the previous one held is refused, and an answered question must quote what you said.</dd>
     <dt>Compactions you didn't start</dt><dd>A fork of the session, the same model reading the same transcript with tools denied, writes the checkpoint beside the summary. The plugin checks and corrects it like a save.</dd>
   </dl>
@@ -268,7 +273,7 @@ Send /smart-compact:rehydrate to rebuild context from it, or keep working from t
       <div class="kicker" style="margin-bottom:12px">Not found elsewhere</div>
       <dl class="rows">
         <dt>The guard</dt><dd>Refusing a checkpoint that drops what the previous one held.</dd>
-        <dt>The pending list</dt><dd>Captured mechanically into the compaction instructions.</dd>
+        <dt>The pending list</dt><dd>Captured mechanically and held until answered.</dd>
         <dt>Checked forks</dt><dd>A fork-written checkpoint corrected like a save, the stock summary kept.</dd>
         <dt>Measured rehydrate</dt><dd>Skipping the files Claude Code already put back.</dd>
       </dl>
@@ -303,8 +308,8 @@ Send /smart-compact:rehydrate to rebuild context from it, or keep working from t
         <dt>Reads</dt><dd>files your checkpoint lists, the profile, the session transcript, HOME</dd>
         <dt>Runs</dt><dd>/compact once per save; /smart-compact:rehydrate with autoRehydrate; read-only git at a compaction you didn't start</dd>
         <dt>Asks the model</dt><dd>one fork of your session per compaction it didn't start, through your own client</dd>
-        <dt>Writes</dt><dd>checkpoints under ~/.claude/checkpoints, transcript notices, a prompt suggestion</dd>
-        <dt>Never</dt><dd>other network calls, other file writes</dd>
+        <dt>Writes</dt><dd>checkpoints under ~/.claude/checkpoints, one small record per session in the plugin's store, transcript notices, a prompt suggestion</dd>
+        <dt>Never</dt><dd>other network calls; other file writes, unless you set SMART_COMPACT_TRACE to a folder</dd>
       </dl>
     </div>
   </div>

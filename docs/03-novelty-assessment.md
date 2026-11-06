@@ -302,7 +302,7 @@ ARCBench adds the caution every write-up needs. Most violations after compaction
 
 Two presentation hazards remain.
 
-**The name is taken twice.** hellosverre/smart-compact (★4) handles compaction timing and offers a `request_compact` tool ([hellosverre/smart-compact](https://github.com/hellosverre/smart-compact)). The ryanportfolio skill described under mechanism (1) carries the same name. If ryanportfolio is not the author's account, reviewers will find both.
+**The name is taken twice.** hellosverre/smart-compact (★4) handles compaction timing and offers a `request_compact` tool ([hellosverre/smart-compact](https://github.com/hellosverre/smart-compact)). The ryanportfolio skill described under mechanism (1) carries the same name. ryanportfolio is not the author's account (the author is ryanonline1234, confirmed 2026-11-06), so reviewers will find both.
 
 **The novelty window is measured in weeks.** The nearest analogues appeared within days of mods going default-on. "Not found as of 2026-11-05" will hold up; "first" will not.
 
