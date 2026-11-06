@@ -95,3 +95,8 @@ Append-only. Each entry: the decision, then why.
 - **The placement experiment was pre-registered and reported as inconclusive** (`docs/04`): the `after` arm was marked invalid by a check that looked only after the last compaction (it did deliver at the first), and the primary measure measured restating rather than resolving. Its code stays on `placement-exp`, and the decision rule was not applied. The real gap it exposed: capture looks back six user messages, so after the first compaction a pending list survives only through the summary chain.
 - **Site changes keep the motion contract:** the new sections sit inside the evidence scene, and the scroll-spec positions are remapped so hero and stage samples land on the same pixels. Commit only on a clean 71/71.
 
+## 2026-11-05 — cite no loss rate from the author's sessions
+
+- **Two automated rubric re-judges of the 47 compactions found 1 and 2 losses.** Both cleared all four losses the 2026-11-04 agents had named. Reading those four shows at least one clear miss: after an automatic compaction, the user's change of direction was dropped and they had to write "Address my earlier question". A rate between 4% and 20% is too uncertain to publish. The README and site rest on the mechanism and on published constraint-decay measurements instead. A defensible rate needs human labels, with the judge as a second rater.
+- **The concrete gap all of this points at:** capture looks back six user messages, so a pending decision or change of direction is not re-supplied after the first compaction. Proposed: keep the captured ask in `$.store` until it is answered, and supply it at every compaction. Not built.
+

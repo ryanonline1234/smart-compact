@@ -40,7 +40,7 @@
 - **New docs:**
   - `docs/03` novelty survey: the guard and pending-list capture were not found elsewhere; the rest pairs prior art with a new last step.
   - `docs/04` placement experiment: pre-registered, inconclusive. A follow-up showed the `after` arm did deliver at the first compaction. The real gap: capture looks back only six user messages, so after the first compaction a pending list survives only through the summary chain. Proposed: keep the captured list in `$.store` until it is answered, and supply it at every compaction.
-  - `docs/05` reproducible session study, with `scripts/sessions_study.py`; the loss figure stays agent-judged.
+  - `docs/05` reproducible session study, with `scripts/sessions_study.py`. The population and the "go with recs" finding reproduce. A loss re-judge (`scripts/loss_judge.py`, clean headless judges) found 1 and 2 of 47, but missed at least one clear loss, so no rate is cited (4–20%).
 - **Branch `placement-exp`** holds the experimental `pendingAskPlacement` code, not merged.
 
 **Next:** watch the first 600k–700k offer and the automatic rehydrates in a real session. The live install moved to a snapshot outside the checkout on 2026-11-05: sessions opened before the move still load from `~/smart-compact` and keep hot-reloading on its commits until they are reopened. Later: decide whether to push to the public repo and deploy the reworked site (`site/` is updated for 0.5.1; the live site still shows 0.1).
