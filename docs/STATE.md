@@ -39,7 +39,7 @@
 - **site/:** updated for 0.5.1, with "What survives" and "Prior art" sections; the motion check passes 71/71. **Not deployed:** the live site still shows 0.1.
 - **New docs:**
   - `docs/03` novelty survey: the guard and pending-list capture were not found elsewhere; the rest pairs prior art with a new last step.
-  - `docs/04` placement experiment: pre-registered, inconclusive.
+  - `docs/04` placement experiment: pre-registered, inconclusive. A follow-up showed the `after` arm did deliver at the first compaction. The real gap: capture looks back only six user messages, so after the first compaction a pending list survives only through the summary chain. Proposed: keep the captured list in `$.store` until it is answered, and supply it at every compaction.
   - `docs/05` reproducible session study, with `scripts/sessions_study.py`; the loss figure stays agent-judged.
 - **Branch `placement-exp`** holds the experimental `pendingAskPlacement` code, not merged.
 
