@@ -190,9 +190,12 @@ python3 scripts/e2e_long.py              # two saves with carry-forward, one com
 python3 scripts/e2e_long.py --scenario ab --model claude-opus-5-5   # the quality gate: compaction checkpoints vs manual saves, 3 pairs and a blind judge
 python3 scripts/calibrate.py FILE...     # measure chars per token on your own files
 python3 scripts/sessions_study.py        # what compaction does to your own long sessions (aggregates only)
+python3 scripts/loss_judge.py --claude PATH   # was anything lost at each compaction? one clean headless judge per compaction
 ```
 
 Load the working copy into a session with `claude --plugin-dir .`.
+
+If you load the plugin from a folder with `CLAUDE_CODE_PLUGIN_DIRS`, point that at a snapshot, not at this git checkout. An interactive session hot-reloads its plugin folder, and a reload restarts the hooks module: its timers go, and so does a fork in the middle of writing a checkpoint. Any commit, rebase or worktree in the checkout writes into `.git` and can trigger one. `scripts/install-live.sh [ref]` refreshes such a snapshot, at `~/.claude/smart-compact/plugin` by default.
 
 ## Known limits
 
