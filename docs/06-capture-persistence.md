@@ -81,3 +81,9 @@ _Run 2026-11-06. 6 sessions on `claude-sonnet-5-5`, CLI 2.1.310; the judge was O
 **Correction to the known limits above.** They cite the confirmed judge miss in `docs/05` as a failure of the summary chain. Re-reading that session shows the summary kept the user's redirect verbatim. That was a request kept but not acted on, and it came before the decision list, not in reply to it. So no observed real-session loss of a pending list motivates this change. It rests on the mechanism `docs/04` found: capture did not persist past the first compaction. The fix is defensive.
 
 **After the gate (2026-11-06):** the main session found that a prompt beginning with a `<system-reminder>` block failed the reply filter. In the desktop app, 7 of 38 of Ryan's prompts did. So a "Go with recs." sent that way wouldn't have ended a hold or been recorded as the answer. The fix strips leading system-reminder blocks before testing a message. It has a unit test only: the e2e prompts carry no such block, so this gate didn't exercise it.
+
+**Review fixes (2026-11-06, main session's review):**
+- **The 20-message cap applies to a list still in the conversation, too.** Before, such a list was supplied once more before it expired.
+- **A pick by number needs a pick verb, `#` or `option`, two or more numbers, or a number alone.** A message that merely opens with a number ("20 minutes later it failed") no longer ends a hold.
+
+Both have unit tests only.

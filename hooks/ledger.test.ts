@@ -161,6 +161,11 @@ describe('a pending ask held across compactions', () => {
     const ask = { list: LIST_ONLY, buttons: 'Build it? Buttons: "Yes, build it", "Not now".' }
     for (const yes of ['go with recs', 'Go with recs.', 'go with your recs but skip 3', 'yes', 'Not now', 'Yes, build it', 'Build 1 and 2', 'Plan option 2', '2 and 3', '#1 only', 'no, scrape instead', 'sounds good'])
       expect([yes, isAnswer(yes, ask)]).toEqual([yes, true])
+    for (const yes of ['2', '#3', 'go with 2, skip 3', '1, 3'])
+      expect([yes, isAnswer(yes, ask)]).toEqual([yes, true])
+    // The main session's review, 2026-11-06: a message that merely opens with a number is not a pick.
+    for (const no of ['20 minutes later it failed', '3 runs per arm look thin', 'do 20 pushups first'])
+      expect([no, isAnswer(no, ask)]).toEqual([no, false])
     for (const no of [READ(1), 'also check the logs first', 'now i want to make this an entire project where the screen is interactive', 'continue', '2026 numbers look off', '1.5k tokens is a lot'])
       expect([no, isAnswer(no, ask)]).toEqual([no, false])
   })
@@ -223,6 +228,12 @@ describe('a pending ask held across compactions', () => {
     expect(hold).toBe(undefined)
     expect(pendingAsk([row('assistant', ASKING), row('user', wrapped)])?.answer).toBe('Go with recs.')
     expect(isOwnText('<system-reminder>only a note</system-reminder>')).toBe(false)
+  })
+  test('a list still in the conversation but unanswered after twenty messages is neither supplied nor held', () => {
+    const rows = [row('assistant', ASKING), ...Array.from({ length: 21 }, (_, i) => row('user', READ(i + 1)))]
+    expect(nextAsk(rows, undefined, NOW)).toEqual({ use: undefined, hold: undefined })
+    const twenty = [row('assistant', ASKING), ...Array.from({ length: 20 }, (_, i) => row('user', READ(i + 1)))]
+    expect(nextAsk(twenty, undefined, NOW).hold?.more).toBe(17)
   })
   test('commands, skill bodies and the summary itself are not replies', () => {
     const rows = [row('assistant', ASKING), row('user', '<command-name>/smart-compact:rehydrate</command-name>'), row('user', 'Base directory for this skill: /x'), SUMMARY_ROW]

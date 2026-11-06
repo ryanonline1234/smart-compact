@@ -353,13 +353,23 @@ export function isOwnText(text: string): boolean {
 
 const APPROVES =
   /^\s*(?:go with (?:the |your |my |all )?(?:recs?|recommendations?)\b|go ahead\b|yes\b|yep\b|yeah\b|sure\b|ok(?:ay)?\b|do it\b|ship it\b|approved?\b|sounds good\b|lgtm\b|proceed\b|no\b|nope\b|not now\b|not yet\b|skip\b|neither\b|both\b|all (?:of them|three|four|five)\b)/i
-/** "Build 1 and 2", "Plan option 2", "#1 only", "2 and 3": a reply that picks items by number. */
-const PICKS = /^\s*(?:(?:go with|do|build|take|pick|choose|plan|option|ship|merge|yes(?: to)?|no(?: to)?|skip)\s+)*(?:option\s+|#)?\d{1,2}(?:\s*(?:,|and|&|\+)\s*#?\d{1,2})*\b(?![.,]\d)/i
+/**
+ * A pick by number: a pick verb before the number ("build 1 and 2", "plan option 2"), "#" or "option" ("#1 only"),
+ * two or more numbers ("2 and 3", "1, 3"), or a number alone ("2"). A message that merely opens with a number
+ * ("20 minutes later it failed") is not one (the main session's review, 2026-11-06).
+ */
+const AFTER_PICK = String.raw`(?=\s*(?:$|[,.;:!?&+]|and\b|only\b|then\b|first\b|but\b|too\b))`
+const PICKS = [
+  new RegExp(String.raw`^\s*(?:go with|do|build|take|pick|choose|plan|ship|merge|yes(?: to)?|no(?: to)?|skip)\s+(?:option\s+|#)?\d{1,2}\b` + AFTER_PICK, 'i'),
+  /^\s*(?:option\s+|#)\d{1,2}\b/i,
+  /^\s*#?\d{1,2}\s*(?:,|and\b|&|\+)\s*#?\d{1,2}\b/i,
+  /^\s*#?\d{1,2}[.)]?\s*$/,
+]
 
 /** Whether a message settles the ask: an approval, a button's label, or a pick by number. Free text does not count. */
 export function isAnswer(reply: string, ask: Pick<PendingAsk, 'buttons'>): boolean {
   const t = reply.trim()
-  if (APPROVES.test(t) || PICKS.test(t)) return true
+  if (APPROVES.test(t) || PICKS.some(p => p.test(t))) return true
   const said = t.toLowerCase().replace(/[.!\s]+$/, '')
   const labels = [...(ask.buttons ?? '').matchAll(/"([^"]+)"/g)].map(m => (m[1] ?? '').toLowerCase().trim()).filter(l => l !== '')
   return labels.some(l => said === l || said.startsWith(`${l} `) || said.startsWith(`${l},`))
@@ -422,6 +432,8 @@ export function nextAsk(rows: readonly Row[], held: HeldAsk | undefined, now: Da
     const more = fresh.replies.length - replies.length
     const latest = more > 0 ? fresh.replies[fresh.replies.length - 1] : undefined
     const isRecent = fresh.replies.length <= 6
+    // Unanswered past HOLD_MESSAGES: the user has moved on, as for a held ask (the main session's review, 2026-11-06).
+    if (answer === undefined && fresh.replies.length > HOLD_MESSAGES) return { use: undefined, hold: undefined }
     const use: PendingAsk | undefined = isRecent || answer === undefined ? { list: fresh.list, buttons: fresh.buttons, answer, replies, more, latest } : undefined
     const isSame = held !== undefined && held.list === fresh.list && held.buttons === fresh.buttons
     const hold: HeldAsk | undefined =
